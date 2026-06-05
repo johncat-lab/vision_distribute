@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<opencv_storage>
+<detector>opencv</detector>
+<template_dir>./template</template_dir>
+<match_threshold>0.85</match_threshold>
+<segment_mode>value</segment_mode>
+<v_threshold>50</v_threshold>
+<grad_threshold>30</grad_threshold>
+<roi_y_center>1500</roi_y_center>
+<roi_y_margin>600</roi_y_margin>
+<model_path></model_path>
+<bg_ref_path></bg_ref_path>
+<verify_with_template>1</verify_with_template>
+</opencv_storage>

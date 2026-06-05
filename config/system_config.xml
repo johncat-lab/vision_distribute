@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<opencv_storage>
+<transport>zeromq</transport>
+<domain_id></domain_id>
+<base_port>5550</base_port>
+<topic_frame>vision/frame</topic_frame>
+<topic_detection>vision/detection</topic_detection>
+<zmq_pub_sub_port>5550</zmq_pub_sub_port>
+<zmq_service_base_port>5560</zmq_service_base_port>
+<camera_service_port>5560</camera_service_port>
+<detector_service_port>5561</detector_service_port>
+<comm_service_port>5562</comm_service_port>
+</opencv_storage>

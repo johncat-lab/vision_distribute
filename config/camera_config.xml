@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<opencv_storage>
+<camera_index>0</camera_index>
+<trigger_mode>line0</trigger_mode>
+<trigger_source>line1</trigger_source>
+<pixel_format>Mono8</pixel_format>
+<exposure_auto>continuous</exposure_auto>
+<exposure_time>10000</exposure_time>
+<gain_auto>continuous</gain_auto>
+<gain>0</gain>
+<frame_rate>30</frame_rate>
+</opencv_storage>
