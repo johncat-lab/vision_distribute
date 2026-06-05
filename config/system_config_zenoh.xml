@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<opencv_storage>
+<!-- ===== Zenoh 传输配置 ===== -->
+<transport>zenoh</transport>
+
+<!-- Zenoh router/scout 地址 -->
+<!-- 本地单机模式: 留空则使用 peer-to-peer 模式 (默认) -->
+<!-- 指定 router: tcp/192.168.1.100:7447 -->
+<!-- 也可指定多个: tcp/192.168.1.100:7447,tcp/192.168.1.101:7447 -->
+<domain_id></domain_id>
+
+<!-- Zenoh 不使用 base_port，保留为默认值即可 -->
+<base_port>5550</base_port>
+
+<!-- 帧发布/订阅 key expression (camera_node -> detector_node) -->
+<!-- Zenoh key expression 支持通配符, 如 vision/** -->
+<topic_frame>vision/frame</topic_frame>
+
+<!-- 检测结果发布/订阅 key expression (detector_node -> comm_node) -->
+<topic_detection>vision/detection</topic_detection>
+</opencv_storage>

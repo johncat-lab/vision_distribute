@@ -1,5 +1,4 @@
 #include "yolo_detector.h"
-#include <opencv2/imgproc.hpp>
 #include <iostream>
 #include <fstream>
 #include <algorithm>
@@ -11,16 +10,10 @@
 #include <sstream>
 #include <iomanip>
 
-#ifdef HAS_ONNXRUNTIME
 #include "onnxruntime_cxx_api.h"
-#endif
 
-#ifdef HAS_NCNN
-#include "ncnn/net.h"
-#include "ncnn/cpu.h"
-#endif
+// ========== ONNX Runtime Session 封装 ==========
 
-#ifdef HAS_ONNXRUNTIME
 struct YoloDetector::OrtSession {
     Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "yolo_detector"};
     Ort::SessionOptions session_options;
@@ -31,17 +24,6 @@ struct YoloDetector::OrtSession {
     std::vector<const char*> input_names;
     std::vector<const char*> output_names;
 };
-#endif
-
-// ========== NCNN Net 封装 ==========
-
-#ifdef HAS_NCNN
-struct YoloDetector::NcnnSession {
-    ncnn::Net net;
-    std::string input_name;
-    std::string output_name;
-};
-#endif
 
 // ========== 构造 / 析构 ==========
 
@@ -49,51 +31,36 @@ YoloDetector::YoloDetector(const std::string& model_path,
                            float conf_threshold,
                            float nms_threshold,
                            int input_width,
-                           int input_height,
-                           Backend backend)
+                           int input_height)
     : model_path_(model_path)
     , conf_threshold_(conf_threshold)
     , nms_threshold_(nms_threshold)
     , input_width_(input_width)
-    , input_height_(input_height)
-    , backend_(backend) {}
+    , input_height_(input_height) {}
 
 YoloDetector::~YoloDetector() {
-#ifdef HAS_ONNXRUNTIME
     delete session_;
     session_ = nullptr;
-#endif
-#ifdef HAS_NCNN
-    delete ncnn_session_;
-    ncnn_session_ = nullptr;
-#endif
 }
 
 // ========== 初始化 ==========
 
 bool YoloDetector::init() {
-    if (backend_ == Backend::NCNN) {
-#ifdef HAS_NCNN
-        return initNcnn();
-#else
-        std::cerr << "[YOLO] NCNN 后端未编译，请使用 cmake -DUSE_NCNN=ON 重新编译" << std::endl;
-        return false;
-#endif
-    }
-
-#ifdef HAS_ONNXRUNTIME
     try {
         session_ = new OrtSession();
 
+        // 配置 session options
         session_->session_options.SetIntraOpNumThreads(2);
         session_->session_options.SetGraphOptimizationLevel(
             GraphOptimizationLevel::ORT_ENABLE_ALL);
 
+        // 加载模型
         session_->session.reset(new Ort::Session(
             session_->env, model_path_.c_str(), session_->session_options));
 
         Ort::AllocatorWithDefaultOptions allocator;
 
+        // 获取输入名称
         size_t num_inputs = session_->session->GetInputCount();
         for (size_t i = 0; i < num_inputs; ++i) {
             auto name = session_->session->GetInputNameAllocated(i, allocator);
@@ -103,6 +70,7 @@ bool YoloDetector::init() {
             session_->input_names.push_back(s.c_str());
         }
 
+        // 获取输出名称
         size_t num_outputs = session_->session->GetOutputCount();
         for (size_t i = 0; i < num_outputs; ++i) {
             auto name = session_->session->GetOutputNameAllocated(i, allocator);
@@ -113,7 +81,7 @@ bool YoloDetector::init() {
         }
 
         ready_.store(true);
-        std::cout << "[YOLO] ONNX 模型加载成功: " << model_path_ << std::endl;
+        std::cout << "[YOLO] 模型加载成功: " << model_path_ << std::endl;
         std::cout << "[YOLO] 输入: " << session_->input_names_str[0]
                   << ", 输出: " << session_->output_names_str[0] << std::endl;
         return true;
@@ -129,175 +97,10 @@ bool YoloDetector::init() {
         session_ = nullptr;
         return false;
     }
-#else
-    std::cerr << "[YOLO] ONNX Runtime 后端未编译，请使用 cmake -DUSE_ONNXRUNTIME=ON 重新编译" << std::endl;
-    return false;
-#endif
 }
 
 bool YoloDetector::isReady() const {
     return ready_.load();
-}
-
-// ========== NCNN 初始化 ==========
-
-#ifdef HAS_NCNN
-bool YoloDetector::initNcnn() {
-    ncnn_session_ = new NcnnSession();
-
-    ncnn_session_->net.opt.num_threads = 2;
-    ncnn_session_->net.opt.use_vulkan_compute = false;
-
-    std::string param_path = model_path_;
-    std::string bin_path = model_path_;
-
-    size_t pos = model_path_.rfind(".param");
-    if (pos != std::string::npos) {
-        bin_path = model_path_.substr(0, pos) + ".bin";
-    } else {
-        bin_path = model_path_ + ".bin";
-    }
-
-    int ret = ncnn_session_->net.load_param(param_path.c_str());
-    if (ret != 0) {
-        std::cerr << "[YOLO] NCNN 加载 param 失败: " << param_path << std::endl;
-        delete ncnn_session_;
-        ncnn_session_ = nullptr;
-        return false;
-    }
-
-    ret = ncnn_session_->net.load_model(bin_path.c_str());
-    if (ret != 0) {
-        std::cerr << "[YOLO] NCNN 加载 bin 失败: " << bin_path << std::endl;
-        delete ncnn_session_;
-        ncnn_session_ = nullptr;
-        return false;
-    }
-
-    ncnn_session_->input_name = "in0";
-    ncnn_session_->output_name = "out0";
-
-    ready_.store(true);
-    std::cout << "[YOLO] NCNN 模型加载成功: " << param_path << " + " << bin_path << std::endl;
-    return true;
-}
-
-ObjectInfoList YoloDetector::detectWithNcnn(const std::vector<float>& input_tensor,
-                                            float scale, int pad_x, int pad_y,
-                                            int orig_width, int orig_height) {
-    ObjectInfoList result;
-
-    if (ncnn_session_ == nullptr) {
-        return result;
-    }
-
-    ncnn::Mat input_mat(input_width_, input_height_, 3);
-    memcpy(input_mat.data, input_tensor.data(), input_tensor.size() * sizeof(float));
-
-    ncnn::Extractor ex = ncnn_session_->net.create_extractor();
-
-    ex.input(ncnn_session_->input_name.c_str(), input_mat);
-
-    ncnn::Mat output_mat;
-    int ret = ex.extract(ncnn_session_->output_name.c_str(), output_mat);
-    if (ret != 0) {
-        std::cerr << "[YOLO] NCNN 推理失败" << std::endl;
-        return result;
-    }
-
-    std::vector<int64_t> output_shape;
-    output_shape.push_back(1);
-
-    std::cout << "[YOLO] NCNN 输出 Mat 形状: c=" << output_mat.c
-              << " h=" << output_mat.h << " w=" << output_mat.w << std::endl;
-
-    if (output_mat.c > 1) {
-        output_shape.push_back(output_mat.c);
-        output_shape.push_back(output_mat.h * output_mat.w);
-    } else {
-        output_shape.push_back(output_mat.h);
-        output_shape.push_back(output_mat.w);
-    }
-
-    std::cout << "[YOLO] NCNN output_shape: [" << output_shape[0]
-              << ", " << output_shape[1] << ", " << output_shape[2]
-              << "]" << std::endl;
-
-    // NCNN 的 ncnn::Mat 数据是连续内存 (无 padding)，
-    // 对 c==1 的 2D Mat: data 指向 [h*w] 连续 buffer，行优先排列
-    // 对 c>1 的 3D Mat: data 指向 [c*h*w] 连续 buffer，CHW 排列
-    // 两种情况都可直接通过 data 指针 + 偏移访问，无需逐通道拷贝
-    // 注意: c==1 时 channel(ch) 对 ch>0 会越界，不能逐通道拷贝
-    const float* output_data = static_cast<const float*>(output_mat.data);
-
-    std::cout << "[YOLO] NCNN 输出前5个预测的原始值:" << std::endl;
-    for (int ch = 0; ch < static_cast<int>(output_shape[1]); ++ch) {
-        std::cout << "  ch" << ch << ":";
-        for (int j = 0; j < 5 && j < static_cast<int>(output_shape[2]); ++j) {
-            std::cout << " " << output_data[ch * output_shape[2] + j];
-        }
-        std::cout << std::endl;
-    }
-
-    int stride = static_cast<int>(output_shape[2]);
-    float ch4_max = -999, ch4_min = 999, ch5_max = -999, ch5_min = 999;
-    for (int j = 0; j < stride; ++j) {
-        float v4 = output_data[4 * stride + j];
-        float v5 = output_data[5 * stride + j];
-        if (v4 > ch4_max) ch4_max = v4;
-        if (v4 < ch4_min) ch4_min = v4;
-        if (v5 > ch5_max) ch5_max = v5;
-        if (v5 < ch5_min) ch5_min = v5;
-    }
-    std::cout << "[YOLO] ch4 range: [" << ch4_min << ", " << ch4_max << "]" << std::endl;
-    std::cout << "[YOLO] ch5 range: [" << ch5_min << ", " << ch5_max << "]" << std::endl;
-
-    result = postprocess(output_data, output_shape, scale, pad_x, pad_y,
-                         orig_width, orig_height);
-
-    return result;
-}
-#endif
-
-// ========== 标注绘制 (OpenCV) ==========
-
-void YoloDetector::drawAnnotations(cv::Mat& image) {
-    for (size_t i = 0; i < last_detections_.size(); ++i) {
-        const Detection& d = last_detections_[i];
-
-        double angle_deg = d.angle * 180.0 / CV_PI;
-        cv::RotatedRect rrect(
-            cv::Point2f(d.x, d.y),
-            cv::Size2f(d.w, d.h),
-            static_cast<float>(angle_deg)
-        );
-
-        cv::Point2f vertices[4];
-        rrect.points(vertices);
-        for (int j = 0; j < 4; ++j) {
-            cv::line(image, vertices[j], vertices[(j + 1) % 4],
-                     cv::Scalar(0, 255, 0), 2);
-        }
-
-        int cs = 15;
-        int cx = static_cast<int>(std::round(d.x));
-        int cy = static_cast<int>(std::round(d.y));
-        cv::line(image, cv::Point(cx - cs, cy),
-                 cv::Point(cx + cs, cy), cv::Scalar(0, 0, 255), 2);
-        cv::line(image, cv::Point(cx, cy - cs),
-                 cv::Point(cx, cy + cs), cv::Scalar(0, 0, 255), 2);
-
-        char idx_label[32];
-        std::snprintf(idx_label, sizeof(idx_label), "#%zu", i);
-        cv::putText(image, idx_label, cv::Point(cx + 10, cy - 10),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
-
-        char coord_label[64];
-        std::snprintf(coord_label, sizeof(coord_label),
-                      "(%.4f, %.4f, a=%.4f)", d.x, d.y, angle_deg);
-        cv::putText(image, coord_label, cv::Point(cx + 10, cy + 15),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 255), 1);
-    }
 }
 
 // ========== 完整推理流水线 ==========
@@ -305,7 +108,7 @@ void YoloDetector::drawAnnotations(cv::Mat& image) {
 ObjectInfoList YoloDetector::detect(const Frame& frame) {
     ObjectInfoList result;
 
-    if (!ready_.load()) {
+    if (!ready_.load() || session_ == nullptr) {
         return result;
     }
 
@@ -318,21 +121,7 @@ ObjectInfoList YoloDetector::detect(const Frame& frame) {
         return result;
     }
 
-    // 2. 推理
-    if (backend_ == Backend::NCNN) {
-#ifdef HAS_NCNN
-        result = detectWithNcnn(input_tensor, scale, pad_x, pad_y,
-                                frame.width, frame.height);
-#endif
-        return result;
-    }
-
-    // ONNX 推理
-#ifdef HAS_ONNXRUNTIME
-    if (session_ == nullptr) {
-        return result;
-    }
-
+    // 2. ONNX 推理
     try {
         std::vector<int64_t> input_shape = {1, 3, input_height_, input_width_};
 
@@ -348,6 +137,7 @@ ObjectInfoList YoloDetector::detect(const Frame& frame) {
             session_->input_names.data(), &input_ort, 1,
             session_->output_names.data(), session_->output_names.size());
 
+        // 3. 后处理
         if (!output_tensors.empty() && output_tensors[0].IsTensor()) {
             auto type_info = output_tensors[0].GetTensorTypeAndShapeInfo();
             auto output_shape = type_info.GetShape();
@@ -360,7 +150,6 @@ ObjectInfoList YoloDetector::detect(const Frame& frame) {
     } catch (const Ort::Exception& e) {
         std::cerr << "[YOLO] 推理错误: " << e.what() << std::endl;
     }
-#endif
 
     return result;
 }
@@ -375,10 +164,6 @@ std::vector<float> YoloDetector::preprocess(const Frame& frame,
 
     int src_w = frame.width;
     int src_h = frame.height;
-
-    std::cout << "[YOLO] 预处理: " << src_w << "x" << src_h
-              << " pixelType=0x" << std::hex << frame.pixelType << std::dec
-              << " dataSize=" << frame.data.size() << std::endl;
 
     // 1. 转换为 RGB (3通道)
     std::vector<unsigned char> rgb_data;
@@ -397,16 +182,8 @@ std::vector<float> YoloDetector::preprocess(const Frame& frame,
             rgb_data[i * 3 + 2] = frame.data[i];
         }
     } else if (frame.data.size() == static_cast<size_t>(src_w * src_h * 3)) {
-        if (frame.pixelType == 0x02180015) {
-            rgb_data.resize(src_w * src_h * 3);
-            for (int i = 0; i < src_w * src_h; ++i) {
-                rgb_data[i * 3 + 0] = frame.data[i * 3 + 2];
-                rgb_data[i * 3 + 1] = frame.data[i * 3 + 1];
-                rgb_data[i * 3 + 2] = frame.data[i * 3 + 0];
-            }
-        } else {
-            rgb_data.assign(frame.data.begin(), frame.data.end());
-        }
+        // RGB8 或 BGR8 直接使用
+        rgb_data.assign(frame.data.begin(), frame.data.end());
     } else {
         // 未知格式，尝试按 Mono8 处理
         size_t expected_mono = static_cast<size_t>(src_w * src_h);
@@ -458,9 +235,9 @@ std::vector<float> YoloDetector::preprocess(const Frame& frame,
     std::vector<float> tensor(3 * total_pixels);
 
     for (int i = 0; i < total_pixels; ++i) {
-        tensor[0 * total_pixels + i] = letterbox[i * 3 + 0] / 255.0f;
-        tensor[1 * total_pixels + i] = letterbox[i * 3 + 1] / 255.0f;
-        tensor[2 * total_pixels + i] = letterbox[i * 3 + 2] / 255.0f;
+        tensor[0 * total_pixels + i] = letterbox[i * 3 + 0] / 255.0f; // R
+        tensor[1 * total_pixels + i] = letterbox[i * 3 + 1] / 255.0f; // G
+        tensor[2 * total_pixels + i] = letterbox[i * 3 + 2] / 255.0f; // B
     }
 
     return tensor;
@@ -503,72 +280,54 @@ ObjectInfoList YoloDetector::postprocess(const float* output_data,
         transposed = true;
     }
 
-    // OBB: YOLOv11-OBB 输出格式 [x, y, w, h, class_scores..., angle]
-    // angle 在最后一个通道，类别置信度在 4~4+num_classes 通道
+    // OBB: 前5个通道 = x, y, w, h, angle; 后面是类别置信度
     int num_classes = num_channels - 5;
     if (num_classes <= 0) {
-        std::cerr << "[YOLO] 输出通道数异常: " << num_channels
-                  << " (dim1=" << dim1 << " dim2=" << dim2
-                  << " num_predictions=" << num_predictions
-                  << " transposed=" << transposed << ")" << std::endl;
+        std::cerr << "[YOLO] 输出通道数异常: " << num_channels << std::endl;
         return result;
     }
 
-    std::cout << "[YOLO] 后处理: num_predictions=" << num_predictions
-              << " num_channels=" << num_channels
-              << " num_classes=" << num_classes
-              << " transposed=" << transposed
-              << " conf_threshold=" << conf_threshold_ << std::endl;
-
+    // 解析检测结果
     std::vector<Detection> detections;
 
-    int score_buckets[5] = {0};
-    float max_conf_all = 0;
-
     for (int i = 0; i < num_predictions; ++i) {
+        // 获取每个预测的数据
         float x, y, w, h, angle;
         float max_score = 0;
         int max_class = 0;
 
         if (transposed) {
+            // [1, num_channels, num_predictions]
             x     = output_data[0 * num_predictions + i];
             y     = output_data[1 * num_predictions + i];
             w     = output_data[2 * num_predictions + i];
             h     = output_data[3 * num_predictions + i];
+            angle = output_data[4 * num_predictions + i];
 
             for (int c = 0; c < num_classes; ++c) {
-                float score = output_data[(4 + c) * num_predictions + i];
+                float score = output_data[(5 + c) * num_predictions + i];
                 if (score > max_score) {
                     max_score = score;
                     max_class = c;
                 }
             }
-
-            angle = output_data[(4 + num_classes) * num_predictions + i];
         } else {
+            // [1, num_predictions, num_channels]
             const float* row = output_data + i * num_channels;
             x     = row[0];
             y     = row[1];
             w     = row[2];
             h     = row[3];
+            angle = row[4];
 
             for (int c = 0; c < num_classes; ++c) {
-                float score = row[4 + c];
+                float score = row[5 + c];
                 if (score > max_score) {
                     max_score = score;
                     max_class = c;
                 }
             }
-
-            angle = row[4 + num_classes];
         }
-
-        if (max_score > max_conf_all) max_conf_all = max_score;
-        if (max_score < 0.1f) score_buckets[0]++;
-        else if (max_score < 0.3f) score_buckets[1]++;
-        else if (max_score < 0.5f) score_buckets[2]++;
-        else if (max_score < 0.7f) score_buckets[3]++;
-        else score_buckets[4]++;
 
         // 置信度过滤
         if (max_score < conf_threshold_) {
@@ -588,15 +347,6 @@ ObjectInfoList YoloDetector::postprocess(const float* output_data,
 
     // NMS
     std::vector<Detection> nms_result = rotatedNMS(detections);
-
-    std::cout << "[YOLO] 检测结果: 置信度过滤后=" << detections.size()
-              << " NMS后=" << nms_result.size() << std::endl;
-    std::cout << "[YOLO] 置信度分布: [<0.1]=" << score_buckets[0]
-              << " [0.1-0.3]=" << score_buckets[1]
-              << " [0.3-0.5]=" << score_buckets[2]
-              << " [0.5-0.7]=" << score_buckets[3]
-              << " [0.7-1.0]=" << score_buckets[4]
-              << " max_conf=" << max_conf_all << std::endl;
 
     // 清空上一次缓存
     last_detections_.clear();
@@ -619,7 +369,7 @@ ObjectInfoList YoloDetector::postprocess(const float* output_data,
         ObjectInfo obj = ObjectInfo::Builder()
                              .setX(static_cast<double>(orig_x))
                              .setY(static_cast<double>(orig_y))
-                             .setAngle(static_cast<double>(-angle_deg))
+                             .setAngle(static_cast<double>(angle_deg))
                              .setType(det.class_id)
                              .build();
         result.add(obj);
@@ -662,20 +412,6 @@ std::vector<YoloDetector::Detection> YoloDetector::rotatedNMS(
             float iou = rotatedIoU(detections[i], detections[j]);
             if (iou > nms_threshold_) {
                 suppressed[j] = true;
-                continue;
-            }
-
-            // 旋转框 IoU 对角度差异敏感，两个预测同一物体的框
-            // 可能因角度微小差异导致 IoU 很低而逃逸 NMS。
-            // 补充中心距离检查：中心距 < 较短边的 15% → 同一物体
-            float dx = detections[i].x - detections[j].x;
-            float dy = detections[i].y - detections[j].y;
-            float dist = std::sqrt(dx * dx + dy * dy);
-            float min_side_i = std::min(detections[i].w, detections[i].h);
-            float min_side_j = std::min(detections[j].w, detections[j].h);
-            float min_side = std::min(min_side_i, min_side_j);
-            if (dist < min_side * 0.15f) {
-                suppressed[j] = true;
             }
         }
     }
@@ -684,99 +420,45 @@ std::vector<YoloDetector::Detection> YoloDetector::rotatedNMS(
 }
 
 float YoloDetector::rotatedIoU(const Detection& a, const Detection& b) {
-    // 使用 Sutherland-Hodgman 多边形裁剪计算精确旋转矩形 IoU
+    // 简化版旋转矩形 IoU:
+    // 使用中心距离 + 面积比 + 角度差作为近似判断
+    // 对于工业场景（物体间距较大），这种近似足够
 
     float dx = a.x - b.x;
     float dy = a.y - b.y;
     float dist = std::sqrt(dx * dx + dy * dy);
 
-    // 快速排除: 中心距离大于两者对角线之和的一半，一定不重叠
+    // 如果中心距离大于两者对角线之和的一半，一定不重叠
     float diag_a = std::sqrt(a.w * a.w + a.h * a.h);
     float diag_b = std::sqrt(b.w * b.w + b.h * b.h);
     if (dist > (diag_a + diag_b) * 0.5f) {
         return 0.0f;
     }
 
-    // 计算两个旋转矩形的4个顶点
-    auto getVertices = [](const Detection& d) -> std::vector<std::pair<float,float>> {
-        float ca = std::cos(d.angle), sa = std::sin(d.angle);
-        float hw = d.w * 0.5f, hh = d.h * 0.5f;
-        float lx[4] = { -hw,  hw,  hw, -hw };
-        float ly[4] = { -hh, -hh,  hh,  hh };
-        std::vector<std::pair<float,float>> pts(4);
-        for (int i = 0; i < 4; ++i) {
-            pts[i].first  = d.x + lx[i] * ca - ly[i] * sa;
-            pts[i].second = d.y + lx[i] * sa + ly[i] * ca;
-        }
-        return pts;
-    };
+    // 使用外接正矩形计算近似 IoU
+    // 计算每个旋转矩形的 AABB
+    float cos_a = std::cos(a.angle), sin_a = std::sin(a.angle);
+    float cos_b = std::cos(b.angle), sin_b = std::sin(b.angle);
 
-    auto polyA = getVertices(a);
-    auto polyB = getVertices(b);
+    // AABB 半宽半高
+    float hw_a = std::abs(a.w * cos_a) * 0.5f + std::abs(a.h * sin_a) * 0.5f;
+    float hh_a = std::abs(a.w * sin_a) * 0.5f + std::abs(a.h * cos_a) * 0.5f;
+    float hw_b = std::abs(b.w * cos_b) * 0.5f + std::abs(b.h * sin_b) * 0.5f;
+    float hh_b = std::abs(b.w * sin_b) * 0.5f + std::abs(b.h * cos_b) * 0.5f;
 
-    // Sutherland-Hodgman 多边形裁剪: 用 polyA 裁剪 polyB
-    auto clipPolygon = [](const std::vector<std::pair<float,float>>& subject,
-                          const std::vector<std::pair<float,float>>& clip) -> std::vector<std::pair<float,float>> {
-        auto output = subject;
-        for (size_t i = 0; i < clip.size() && !output.empty(); ++i) {
-            auto input = output;
-            output.clear();
-            size_t j = (i + 1) % clip.size();
-            float x1 = clip[i].first,  y1 = clip[i].second;
-            float x2 = clip[j].first,  y2 = clip[j].second;
-            float ex = x2 - x1, ey = y2 - y1;
+    // AABB 交集
+    float x_overlap = std::max(0.0f, std::min(a.x + hw_a, b.x + hw_b) -
+                                     std::max(a.x - hw_a, b.x - hw_b));
+    float y_overlap = std::max(0.0f, std::min(a.y + hh_a, b.y + hh_b) -
+                                     std::max(a.y - hh_a, b.y - hw_b));
 
-            auto inside = [&](const std::pair<float,float>& p) -> bool {
-                return ex * (p.second - y1) - ey * (p.first - x1) >= 0;
-            };
-
-            auto intersect = [&](const std::pair<float,float>& p1,
-                                 const std::pair<float,float>& p2) -> std::pair<float,float> {
-                float dx1 = p2.first - p1.first, dy1 = p2.second - p1.second;
-                float denom = ex * dy1 - ey * dx1;
-                if (std::abs(denom) < 1e-10f) return p1;
-                float t = ((x1 - p1.first) * dy1 - (y1 - p1.second) * dx1) / denom;
-                return {p1.first + t * dx1, p1.second + t * dy1};
-            };
-
-            for (size_t k = 0; k < input.size(); ++k) {
-                size_t k2 = (k + 1) % input.size();
-                bool in_k  = inside(input[k]);
-                bool in_k2 = inside(input[k2]);
-                if (in_k && in_k2) {
-                    output.push_back(input[k2]);
-                } else if (in_k && !in_k2) {
-                    output.push_back(intersect(input[k], input[k2]));
-                } else if (!in_k && in_k2) {
-                    output.push_back(intersect(input[k], input[k2]));
-                    output.push_back(input[k2]);
-                }
-            }
-        }
-        return output;
-    };
-
-    auto intersection = clipPolygon(polyB, polyA);
-
-    // Shoelace 公式计算多边形面积
-    auto polyArea = [](const std::vector<std::pair<float,float>>& poly) -> float {
-        if (poly.size() < 3) return 0.0f;
-        float area = 0.0f;
-        for (size_t i = 0; i < poly.size(); ++i) {
-            size_t j = (i + 1) % poly.size();
-            area += poly[i].first * poly[j].second;
-            area -= poly[j].first * poly[i].second;
-        }
-        return std::abs(area) * 0.5f;
-    };
-
-    float inter_area = polyArea(intersection);
+    float intersection = x_overlap * y_overlap;
     float area_a = a.w * a.h;
     float area_b = b.w * b.h;
-    float union_area = area_a + area_b - inter_area;
+    float union_area = area_a + area_b - intersection;
 
     if (union_area <= 0) return 0.0f;
-    return inter_area / union_area;
+    return intersection / union_area;
 }
 
 // ========== 双线性插值 resize ==========
@@ -1071,8 +753,8 @@ bool YoloDetector::saveAnnotated(const Frame& frame, const std::string& path) {
         // 文本: #i x=.. y=.. a=.. t=..
         double angle_deg = d.angle * 180.0 / M_PI;
         std::string label = "#" + std::to_string(static_cast<int>(i))
-                          + " x=" + formatFloat(d.x, 4)
-                          + " y=" + formatFloat(d.y, 4)
+                          + " x=" + formatFloat(d.x, 1)
+                          + " y=" + formatFloat(d.y, 1)
                           + " a=" + formatFloat(angle_deg, 1)
                           + " t=" + std::to_string(d.class_id);
 

@@ -50,14 +50,6 @@ void OpenCvTemplateDetector::setGradientThreshold(int grad_threshold) {
     std::cout << "[模版检测] 梯度阈值: " << grad_threshold << std::endl;
 }
 
-void OpenCvTemplateDetector::setRoiYCenter(int y_center) {
-    roi_y_center_ = y_center;
-}
-
-void OpenCvTemplateDetector::setRoiYMargin(int y_margin) {
-    roi_y_margin_ = y_margin;
-}
-
 bool OpenCvTemplateDetector::init() {
     // 加载模版元信息
     loadTemplateInfo();
@@ -96,24 +88,16 @@ bool OpenCvTemplateDetector::init() {
     std::string mask_path = template_dir_ + "/template_mask.png";
     template_mask_ = cv::imread(mask_path, cv::IMREAD_GRAYSCALE);
     if (!template_mask_.empty()) {
+        // 确保 mask 是二值的
         cv::threshold(template_mask_, template_mask_, 128, 255, cv::THRESH_BINARY);
         double mask_ratio = cv::countNonZero(template_mask_) / (double)(template_mask_.rows * template_mask_.cols);
         std::cout << "[模版检测] 前景 mask 已加载: " << mask_path
                   << " (前景 " << (mask_ratio * 100) << "%%)" << std::endl;
 
+        // 用前景均值填充背景像素 → CCOEFF 自动忽略 (T-Tmean≈0)
         cv::Scalar fg_mean = cv::mean(template_img_, template_mask_);
-        cv::Scalar bg_mean = cv::mean(template_img_, ~template_mask_);
-        double fg_bg_contrast = std::abs(fg_mean[0] - bg_mean[0]);
-
-        if (fg_bg_contrast >= 30.0) {
-            template_img_.setTo(bg_mean, ~template_mask_);
-            std::cout << "[模版检测] 前景/背景对比度充足 (" << fg_bg_contrast
-                      << "), 背景填充背景均值 (" << bg_mean << ", fg=" << fg_mean << ")" << std::endl;
-        } else {
-            template_img_.setTo(fg_mean, ~template_mask_);
-            std::cout << "[模版检测] 前景/背景对比度低 (" << fg_bg_contrast
-                      << "), 背景已填充前景均值 (" << fg_mean << ")" << std::endl;
-        }
+        template_img_.setTo(fg_mean, ~template_mask_);
+        std::cout << "[模版检测] 背景已填充前景均值 (" << fg_mean << ")" << std::endl;
     } else {
         std::cout << "[模版检测] 未找到前景 mask, 使用无 mask 模式" << std::endl;
     }
@@ -125,22 +109,14 @@ bool OpenCvTemplateDetector::init() {
 
     cv::Point2f center(template_img_.cols / 2.0f, template_img_.rows / 2.0f);
 
+    // 计算旋转后不被截断的图像尺寸
     int diag = static_cast<int>(std::ceil(
         std::sqrt(template_img_.cols * template_img_.cols +
                   template_img_.rows * template_img_.rows)));
 
-    // 旋转边界填充值: 与模板 mask 外区域一致
-    // mask 外区域已填充为 bg_mean 或 fg_mean, 旋转边角也用相同值
-    cv::Scalar border_val;
-    if (!template_mask_.empty()) {
-        border_val = use_gray_mode_
-            ? cv::Scalar(template_img_.at<uchar>(0, 0))
-            : cv::Scalar(template_img_.at<cv::Vec3b>(0, 0)[0],
-                         template_img_.at<cv::Vec3b>(0, 0)[1],
-                         template_img_.at<cv::Vec3b>(0, 0)[2]);
-    } else {
-        border_val = use_gray_mode_ ? cv::Scalar(0) : cv::Scalar(0, 0, 0);
-    }
+    // 旋转边界填充值: 使用 0 (黑色)
+    // 对于暗背景场景, 黑色边界在 CCOEFF_NORMED 中能与暗背景产生正相关, 提升分数
+    cv::Scalar border_val = use_gray_mode_ ? cv::Scalar(0) : cv::Scalar(0, 0, 0);
 
     for (int angle = 0; angle < 360; ++angle) {
         cv::Mat rot_mat = cv::getRotationMatrix2D(center, angle, 1.0);
@@ -195,11 +171,6 @@ bool OpenCvTemplateDetector::init() {
         cv::Size(morph_kernel_size_, morph_kernel_size_));
     morph_kernel_small_ = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
 
-    if (roi_y_center_ >= 0 && roi_y_margin_ > 0) {
-        std::cout << "[模版检测] ROI Y中心: " << roi_y_center_
-                  << " 边距: " << roi_y_margin_ << std::endl;
-    }
-
     ready_ = true;
     return true;
 }
@@ -230,22 +201,6 @@ cv::Mat OpenCvTemplateDetector::frameToBGR(const Frame& frame) const {
     }
 
     return result;
-}
-
-cv::Mat OpenCvTemplateDetector::frameToGray(const Frame& frame) const {
-    size_t expected_mono = static_cast<size_t>(frame.width) * frame.height;
-
-    if (frame.data.size() == expected_mono) {
-        return cv::Mat(frame.height, frame.width, CV_8UC1,
-                       const_cast<unsigned char*>(frame.data.data())).clone();
-    }
-
-    cv::Mat bgr = frameToBGR(frame);
-    if (bgr.empty()) return cv::Mat();
-
-    cv::Mat gray;
-    cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
-    return gray;
 }
 
 std::vector<cv::Rect> OpenCvTemplateDetector::findCandidateRegions(const cv::Mat& bgr) const {
@@ -420,140 +375,12 @@ std::vector<cv::Rect> OpenCvTemplateDetector::findCandidateRegions(const cv::Mat
     return regions;
 }
 
-std::vector<cv::Rect> OpenCvTemplateDetector::findCandidateRegionsGray(const cv::Mat& gray) const {
-    std::vector<cv::Rect> regions;
-
-    if (segment_mode_ == "value") {
-        cv::Mat product_mask;
-        cv::threshold(gray, product_mask, v_threshold_, 255, cv::THRESH_BINARY);
-
-        cv::morphologyEx(product_mask, product_mask, cv::MORPH_CLOSE, morph_kernel_);
-        cv::morphologyEx(product_mask, product_mask, cv::MORPH_OPEN, morph_kernel_);
-
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(product_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-        int tmpl_diag = rotated_templates_.empty() ? 0 : rotated_templates_[0].cols;
-
-        for (const auto& contour : contours) {
-            double area = cv::contourArea(contour);
-            if (area < min_area_) continue;
-
-            if (area <= max_area_) {
-                regions.push_back(cv::boundingRect(contour));
-            } else if (tmpl_diag > 0) {
-                cv::Moments m = cv::moments(contour);
-                if (m.m00 > 0) {
-                    int cx = static_cast<int>(m.m10 / m.m00);
-                    int cy = static_cast<int>(m.m01 / m.m00);
-                    int half = tmpl_diag;
-                    cv::Rect clipped(
-                        std::max(0, cx - half),
-                        std::max(0, cy - half),
-                        std::min(gray.cols - std::max(0, cx - half), half * 2),
-                        std::min(gray.rows - std::max(0, cy - half), half * 2)
-                    );
-                    regions.push_back(clipped);
-                }
-            }
-        }
-
-        std::cout << "[模版检测] value 模式: V>" << v_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
-        return regions;
-    }
-
-    if (segment_mode_ == "gradient") {
-        cv::Mat grad_x, grad_y;
-        cv::Sobel(gray, grad_x, CV_16S, 1, 0, 3);
-        cv::Sobel(gray, grad_y, CV_16S, 0, 1, 3);
-        cv::convertScaleAbs(grad_x, grad_x);
-        cv::convertScaleAbs(grad_y, grad_y);
-        cv::Mat grad_mag;
-        cv::addWeighted(grad_x, 0.5, grad_y, 0.5, 0, grad_mag);
-
-        cv::Mat edge_mask;
-        cv::threshold(grad_mag, edge_mask, grad_threshold_, 255, cv::THRESH_BINARY);
-
-        cv::dilate(edge_mask, edge_mask, morph_kernel_small_);
-        cv::morphologyEx(edge_mask, edge_mask, cv::MORPH_CLOSE, morph_kernel_);
-        cv::morphologyEx(edge_mask, edge_mask, cv::MORPH_OPEN, morph_kernel_);
-
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(edge_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-        int tmpl_diag = rotated_templates_.empty() ? 0 : rotated_templates_[0].cols;
-
-        for (const auto& contour : contours) {
-            double area = cv::contourArea(contour);
-            if (area < min_area_) continue;
-
-            if (area <= max_area_) {
-                regions.push_back(cv::boundingRect(contour));
-            } else if (tmpl_diag > 0) {
-                cv::Moments m = cv::moments(contour);
-                if (m.m00 > 0) {
-                    int cx = static_cast<int>(m.m10 / m.m00);
-                    int cy = static_cast<int>(m.m01 / m.m00);
-                    int half = tmpl_diag;
-                    cv::Rect clipped(
-                        std::max(0, cx - half),
-                        std::max(0, cy - half),
-                        std::min(gray.cols - std::max(0, cx - half), half * 2),
-                        std::min(gray.rows - std::max(0, cy - half), half * 2)
-                    );
-                    regions.push_back(clipped);
-                }
-            }
-        }
-
-        std::cout << "[模版检测] gradient 模式: grad>" << grad_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
-        return regions;
-    }
-
-    // hsv 模式需要彩色信息, 回退到 BGR 路径
-    cv::Mat bgr;
-    cv::cvtColor(gray, bgr, cv::COLOR_GRAY2BGR);
-    return findCandidateRegions(bgr);
-}
-
-static cv::Point2d subPixelRefine(const cv::Mat& result, const cv::Point& peak) {
-    if (peak.x <= 0 || peak.x >= result.cols - 1 ||
-        peak.y <= 0 || peak.y >= result.rows - 1) {
-        return cv::Point2d(peak.x, peak.y);
-    }
-
-    float fx_m = result.at<float>(peak.y, peak.x - 1);
-    float fx_0 = result.at<float>(peak.y, peak.x);
-    float fx_p = result.at<float>(peak.y, peak.x + 1);
-    float fy_m = result.at<float>(peak.y - 1, peak.x);
-    float fy_0 = result.at<float>(peak.y, peak.x);
-    float fy_p = result.at<float>(peak.y + 1, peak.x);
-
-    double dx = 0.0, dy = 0.0;
-    double denom_x = fx_m - 2.0 * fx_0 + fx_p;
-    double denom_y = fy_m - 2.0 * fy_0 + fy_p;
-
-    if (std::abs(denom_x) > 1e-10) {
-        dx = 0.5 * (fx_m - fx_p) / denom_x;
-    }
-    if (std::abs(denom_y) > 1e-10) {
-        dy = 0.5 * (fy_m - fy_p) / denom_y;
-    }
-
-    dx = std::max(-0.5, std::min(0.5, dx));
-    dy = std::max(-0.5, std::min(0.5, dy));
-
-    return cv::Point2d(peak.x + dx, peak.y + dy);
-}
-
 OpenCvTemplateDetector::MatchResult
 OpenCvTemplateDetector::matchInRegion(const cv::Mat& image, const cv::Rect& roi, int coarse_step_override) const {
     MatchResult best;
     best.score = 0.0;
     best.angle = 0;
-    best.center = cv::Point2d(roi.x + roi.width / 2.0, roi.y + roi.height / 2.0);
+    best.center = cv::Point(roi.x + roi.width / 2, roi.y + roi.height / 2);
 
     int effective_coarse_step = (coarse_step_override > 0) ? coarse_step_override : angle_step_coarse_;
 
@@ -639,7 +466,6 @@ OpenCvTemplateDetector::matchInRegion(const cv::Mat& image, const cv::Rect& roi,
         double best_fine_score = 0.0;
         int best_fine_angle = best_coarse_angle;
         cv::Point best_fine_loc;
-        cv::Mat best_fine_result;
         int fine_scale = 1;  // 精搜索使用的缩放倍率
 
         // 优先使用 1/2 尺寸模板精搜索 (大幅减少计算量)
@@ -666,12 +492,13 @@ OpenCvTemplateDetector::matchInRegion(const cv::Mat& image, const cv::Rect& roi,
                     best_fine_score = max_val;
                     best_fine_angle = norm_angle;
                     best_fine_loc = max_loc;
-                    best_fine_result = match_result_buf_.clone();
                 }
 
+                // 高分早停
                 if (best_fine_score > 0.92) break;
             }
         } else {
+            // 回退: 全尺寸精搜索
             cv::Mat fine_search = image(fine_roi);
 
             for (int angle = fine_start; angle <= fine_end; angle += angle_step_fine_) {
@@ -690,9 +517,9 @@ OpenCvTemplateDetector::matchInRegion(const cv::Mat& image, const cv::Rect& roi,
                     best_fine_score = max_val;
                     best_fine_angle = norm_angle;
                     best_fine_loc = max_loc;
-                    best_fine_result = match_result_buf_.clone();
                 }
 
+                // 高分早停
                 if (best_fine_score > 0.92) break;
             }
         }
@@ -702,17 +529,15 @@ OpenCvTemplateDetector::matchInRegion(const cv::Mat& image, const cv::Rect& roi,
         best.angle = best_fine_angle;
         if (fine_scale == 2) {
             int half_tmpl_center = rotated_templates_half_[0].cols / 2;
-            cv::Point2d sub_loc = subPixelRefine(best_fine_result, best_fine_loc);
-            best.center = cv::Point2d(
-                fine_roi.x + (sub_loc.x + half_tmpl_center) * 2,
-                fine_roi.y + (sub_loc.y + half_tmpl_center) * 2
+            best.center = cv::Point(
+                fine_roi.x + (best_fine_loc.x + half_tmpl_center) * 2,
+                fine_roi.y + (best_fine_loc.y + half_tmpl_center) * 2
             );
         } else {
-            double half_tmpl_orig = tmpl_diag / 2.0;
-            cv::Point2d sub_loc = subPixelRefine(best_fine_result, best_fine_loc);
-            best.center = cv::Point2d(
-                fine_roi.x + sub_loc.x + half_tmpl_orig,
-                fine_roi.y + sub_loc.y + half_tmpl_orig
+            int half_tmpl_orig = tmpl_diag / 2;
+            best.center = cv::Point(
+                fine_roi.x + best_fine_loc.x + half_tmpl_orig,
+                fine_roi.y + best_fine_loc.y + half_tmpl_orig
             );
         }
 
@@ -755,13 +580,13 @@ OpenCvTemplateDetector::matchInRegion(const cv::Mat& image, const cv::Rect& roi,
         return best;
     }
 
+    // 精搜索: 在最佳粗角度附近匹配
     int fine_start = best_coarse_angle - effective_coarse_step / 2;
     int fine_end = best_coarse_angle + effective_coarse_step / 2;
 
     int best_fine_angle = best_coarse_angle;
     double best_fine_score = best_coarse_score;
     cv::Point best_fine_loc = best_coarse_loc;
-    cv::Mat best_fine_result;
 
     for (int angle = fine_start; angle <= fine_end; angle += angle_step_fine_) {
         int norm_angle = ((angle % 360) + 360) % 360;
@@ -784,138 +609,21 @@ OpenCvTemplateDetector::matchInRegion(const cv::Mat& image, const cv::Rect& roi,
             best_fine_score = max_val;
             best_fine_angle = norm_angle;
             best_fine_loc = max_loc;
-            best_fine_result = match_result_buf_.clone();
         }
 
+        // 高分早停
         if (best_fine_score > 0.92) break;
     }
 
-    if (best_fine_result.empty()) {
-        cv::matchTemplate(search_region, rotated_templates_[best_coarse_angle],
-                          best_fine_result, cv::TM_CCOEFF_NORMED);
-    }
-
-    double half_tmpl = tmpl_diag / 2.0;
-    cv::Point2d sub_loc = subPixelRefine(best_fine_result, best_fine_loc);
+    int half_tmpl = tmpl_diag / 2;
     best.score = best_fine_score;
     best.angle = best_fine_angle;
-    best.center = cv::Point2d(
-        expanded_roi.x + sub_loc.x + half_tmpl,
-        expanded_roi.y + sub_loc.y + half_tmpl
+    best.center = cv::Point(
+        expanded_roi.x + best_fine_loc.x + half_tmpl,
+        expanded_roi.y + best_fine_loc.y + half_tmpl
     );
 
     return best;
-}
-
-std::vector<OpenCvTemplateDetector::MatchResult>
-OpenCvTemplateDetector::matchInRegionMulti(const cv::Mat& image, const cv::Rect& roi, int coarse_step_override) const {
-    std::vector<MatchResult> results;
-
-    int tmpl_diag = rotated_templates_.empty() ? 0 : rotated_templates_[0].cols;
-    if (tmpl_diag == 0) return results;
-
-    cv::Rect expanded_roi = roi;
-    int pad = tmpl_diag / 2 + 10;
-    expanded_roi.x = std::max(0, expanded_roi.x - pad);
-    expanded_roi.y = std::max(0, expanded_roi.y - pad);
-    expanded_roi.width = std::min(image.cols - expanded_roi.x, expanded_roi.width + 2 * pad);
-    expanded_roi.height = std::min(image.rows - expanded_roi.y, expanded_roi.height + 2 * pad);
-
-    if (expanded_roi.width < tmpl_diag || expanded_roi.height < tmpl_diag) return results;
-
-    cv::Mat search_region = image(expanded_roi);
-
-    int effective_coarse_step = coarse_step_override > 0 ? coarse_step_override : angle_step_coarse_;
-
-    struct AnglePeak {
-        double score;
-        int angle;
-        cv::Point loc;
-    };
-    std::vector<AnglePeak> angle_peaks;
-
-    for (int angle = 0; angle < 360; angle += effective_coarse_step) {
-        const cv::Mat& tmpl = rotated_templates_[angle];
-        if (search_region.cols < tmpl.cols || search_region.rows < tmpl.rows) continue;
-
-        cv::matchTemplate(search_region, tmpl, match_result_buf_, cv::TM_CCOEFF_NORMED);
-
-        double max_val;
-        cv::Point max_loc;
-        cv::minMaxLoc(match_result_buf_, nullptr, &max_val, nullptr, &max_loc);
-
-        if (max_val >= match_threshold_) {
-            angle_peaks.push_back({max_val, angle, max_loc});
-        }
-    }
-
-    std::sort(angle_peaks.begin(), angle_peaks.end(),
-        [](const AnglePeak& a, const AnglePeak& b) { return a.score > b.score; });
-
-    if (angle_peaks.empty()) return results;
-
-    int best_angle = angle_peaks[0].angle;
-
-    int fine_start = best_angle - effective_coarse_step / 2;
-    int fine_end = best_angle + effective_coarse_step / 2;
-
-    double best_fine_score = 0;
-    int best_fine_angle = best_angle;
-    cv::Point best_fine_loc;
-
-    for (int angle = fine_start; angle <= fine_end; angle += angle_step_fine_) {
-        int norm_angle = ((angle % 360) + 360) % 360;
-        const cv::Mat& tmpl = rotated_templates_[norm_angle];
-        if (search_region.cols < tmpl.cols || search_region.rows < tmpl.rows) continue;
-
-        cv::matchTemplate(search_region, tmpl, match_result_buf_, cv::TM_CCOEFF_NORMED);
-
-        double max_val;
-        cv::Point max_loc;
-        cv::minMaxLoc(match_result_buf_, nullptr, &max_val, nullptr, &max_loc);
-
-        if (max_val > best_fine_score) {
-            best_fine_score = max_val;
-            best_fine_angle = norm_angle;
-            best_fine_loc = max_loc;
-        }
-    }
-
-    const cv::Mat& best_tmpl = rotated_templates_[best_fine_angle];
-    cv::Mat multi_result;
-    cv::matchTemplate(search_region, best_tmpl, multi_result, cv::TM_CCOEFF_NORMED);
-
-    int suppress_radius = tmpl_diag / 2;
-    double half_tmpl = tmpl_diag / 2.0;
-    cv::Mat result_copy = multi_result.clone();
-    int max_objects = 10;
-
-    for (int i = 0; i < max_objects; ++i) {
-        double max_val;
-        cv::Point max_loc;
-        cv::minMaxLoc(result_copy, nullptr, &max_val, nullptr, &max_loc);
-
-        if (max_val < match_threshold_) break;
-
-        cv::Point2d sub_loc = subPixelRefine(multi_result, max_loc);
-
-        MatchResult mr;
-        mr.score = max_val;
-        mr.angle = best_fine_angle;
-        mr.center = cv::Point2d(
-            expanded_roi.x + sub_loc.x + half_tmpl,
-            expanded_roi.y + sub_loc.y + half_tmpl
-        );
-        results.push_back(mr);
-
-        int x0 = std::max(0, max_loc.x - suppress_radius);
-        int y0 = std::max(0, max_loc.y - suppress_radius);
-        int x1 = std::min(result_copy.cols - 1, max_loc.x + suppress_radius);
-        int y1 = std::min(result_copy.rows - 1, max_loc.y + suppress_radius);
-        result_copy(cv::Rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) = 0;
-    }
-
-    return results;
 }
 
 std::vector<OpenCvTemplateDetector::DetResult>
@@ -954,36 +662,20 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
 
     auto t_total_start = std::chrono::high_resolution_clock::now();
 
-    size_t expected_mono = static_cast<size_t>(frame.width) * frame.height;
-    bool is_mono8 = (frame.data.size() == expected_mono);
-
-    cv::Mat bgr, gray;
-    if (use_gray_mode_ && is_mono8) {
-        gray = cv::Mat(frame.height, frame.width, CV_8UC1,
-                       const_cast<unsigned char*>(frame.data.data())).clone();
-    } else {
-        bgr = frameToBGR(frame);
-        if (bgr.empty()) return result;
-    }
+    cv::Mat bgr = frameToBGR(frame);
+    if (bgr.empty()) return result;
 
     // 1. 颜色分割找候选区域
     auto t_seg_start = std::chrono::high_resolution_clock::now();
-    std::vector<cv::Rect> candidates;
-    if (use_gray_mode_ && is_mono8 && !gray.empty()) {
-        candidates = findCandidateRegionsGray(gray);
-    } else {
-        candidates = findCandidateRegions(bgr);
-    }
+    std::vector<cv::Rect> candidates = findCandidateRegions(bgr);
     auto t_seg_end = std::chrono::high_resolution_clock::now();
     double seg_ms = std::chrono::duration<double, std::milli>(t_seg_end - t_seg_start).count();
 
-    int img_w = bgr.empty() ? gray.cols : bgr.cols;
-    int img_h = bgr.empty() ? gray.rows : bgr.rows;
     int tmpl_diag = rotated_templates_[0].cols;
-    cv::Point img_center(img_w / 2, img_h / 2);
+    cv::Point img_center(bgr.cols / 2, bgr.rows / 2);
 
     // 按距图像中心距离升序排序 (中心优先: 传送带位置固定)
-    const int max_candidates = 20;
+    const int max_candidates = 5;
     std::sort(candidates.begin(), candidates.end(),
         [&img_center](const cv::Rect& a, const cv::Rect& b) {
             cv::Point ca(a.x + a.width / 2, a.y + a.height / 2);
@@ -996,18 +688,6 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
         });
     if (static_cast<int>(candidates.size()) > max_candidates) {
         candidates.resize(max_candidates);
-    }
-
-    if (roi_y_center_ >= 0 && roi_y_margin_ > 0) {
-        int y_lo = roi_y_center_ - roi_y_margin_;
-        int y_hi = roi_y_center_ + roi_y_margin_;
-        candidates.erase(
-            std::remove_if(candidates.begin(), candidates.end(),
-                [y_lo, y_hi](const cv::Rect& r) {
-                    int cy = r.y + r.height / 2;
-                    return cy < y_lo || cy > y_hi;
-                }),
-            candidates.end());
     }
 
     last_candidate_count_ = static_cast<int>(candidates.size());
@@ -1026,8 +706,10 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
     // 2. 准备匹配用图像
     cv::Mat match_img;
     if (use_gray_mode_) {
-        if (!gray.empty()) {
-            match_img = gray;
+        size_t expected_mono = static_cast<size_t>(frame.width) * frame.height;
+        if (frame.data.size() == expected_mono) {
+            match_img = cv::Mat(frame.height, frame.width, CV_8UC1,
+                                const_cast<unsigned char*>(frame.data.data())).clone();
         } else {
             cv::cvtColor(bgr, match_img, cv::COLOR_BGR2GRAY);
         }
@@ -1035,113 +717,29 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
         match_img = bgr;
     }
 
-    // 3. 对候选区域进行模版匹配, 找到最佳角度
+    // 3. 对每个候选区域进行模版匹配
     auto t_match_start = std::chrono::high_resolution_clock::now();
     std::vector<DetResult> detections;
-
-    int best_global_angle = 0;
-    double best_global_score = 0.0;
 
     for (const auto& roi : candidates) {
         MatchResult match = matchInRegion(match_img, roi);
 
-        if (match.score > best_global_score) {
-            best_global_score = match.score;
-            best_global_angle = match.angle;
+        if (match.score > last_best_score_) {
+            last_best_score_ = match.score;
         }
-    }
 
-    if (best_global_score > last_best_score_) {
-        last_best_score_ = best_global_score;
-    }
+        if (match.score >= match_threshold_) {
+            DetResult det;
+            det.x = match.center.x;
+            det.y = match.center.y;
+            int image_angle = ((360 - match.angle) % 360 + 360) % 360;
+            int grip_angle = image_angle % 180;
+            if (grip_angle >= 90) grip_angle -= 180;
+            det.angle = grip_angle;
+            det.score = match.score;
+            detections.push_back(det);
 
-    // 4. 用最佳角度对全图匹配, 找所有峰值 (多目标检测)
-    // 使用 1/4 金字塔加速: 先在缩小图上找峰值, 再映射回原图坐标
-    if (best_global_score >= match_threshold_ && !rotated_templates_.empty()) {
-        if (!rotated_templates_quarter_.empty()) {
-            const int scale = 4;
-            const cv::Mat& best_tmpl_q = rotated_templates_quarter_[best_global_angle];
-            int suppress_radius_q = best_tmpl_q.cols / 2;
-            double half_tmpl_q = best_tmpl_q.cols / 2.0;
-
-            cv::Mat search_small;
-            cv::resize(match_img, search_small, cv::Size(), 1.0 / scale, 1.0 / scale, cv::INTER_AREA);
-
-            cv::Mat full_result;
-            cv::matchTemplate(search_small, best_tmpl_q, full_result, cv::TM_CCOEFF_NORMED);
-
-            cv::Mat result_copy = full_result.clone();
-            int max_objects = 20;
-
-            for (int i = 0; i < max_objects; ++i) {
-                double max_val;
-                cv::Point max_loc;
-                cv::minMaxLoc(result_copy, nullptr, &max_val, nullptr, &max_loc);
-
-                if (max_val < match_threshold_) break;
-
-                if (max_val > last_best_score_) {
-                    last_best_score_ = max_val;
-                }
-
-                cv::Point2d sub_loc = subPixelRefine(full_result, max_loc);
-
-                DetResult det;
-                det.x = (sub_loc.x + half_tmpl_q) * scale;
-                det.y = (sub_loc.y + half_tmpl_q) * scale;
-                int image_angle = ((360 - best_global_angle) % 360 + 360) % 360;
-                int grip_angle = image_angle % 180;
-                if (grip_angle >= 90) grip_angle -= 180;
-                det.angle = grip_angle;
-                det.score = max_val;
-                detections.push_back(det);
-
-                int x0 = std::max(0, max_loc.x - suppress_radius_q);
-                int y0 = std::max(0, max_loc.y - suppress_radius_q);
-                int x1 = std::min(result_copy.cols - 1, max_loc.x + suppress_radius_q);
-                int y1 = std::min(result_copy.rows - 1, max_loc.y + suppress_radius_q);
-                result_copy(cv::Rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) = 0;
-            }
-        } else {
-            const cv::Mat& best_tmpl = rotated_templates_[best_global_angle];
-            int suppress_radius = best_tmpl.cols / 2;
-            double half_tmpl = best_tmpl.cols / 2.0;
-
-            cv::Mat full_result;
-            cv::matchTemplate(match_img, best_tmpl, full_result, cv::TM_CCOEFF_NORMED);
-
-            cv::Mat result_copy = full_result.clone();
-            int max_objects = 20;
-
-            for (int i = 0; i < max_objects; ++i) {
-                double max_val;
-                cv::Point max_loc;
-                cv::minMaxLoc(result_copy, nullptr, &max_val, nullptr, &max_loc);
-
-                if (max_val < match_threshold_) break;
-
-                if (max_val > last_best_score_) {
-                    last_best_score_ = max_val;
-                }
-
-                cv::Point2d sub_loc = subPixelRefine(full_result, max_loc);
-
-                DetResult det;
-                det.x = sub_loc.x + half_tmpl;
-                det.y = sub_loc.y + half_tmpl;
-                int image_angle = ((360 - best_global_angle) % 360 + 360) % 360;
-                int grip_angle = image_angle % 180;
-                if (grip_angle >= 90) grip_angle -= 180;
-                det.angle = grip_angle;
-                det.score = max_val;
-                detections.push_back(det);
-
-                int x0 = std::max(0, max_loc.x - suppress_radius);
-                int y0 = std::max(0, max_loc.y - suppress_radius);
-                int x1 = std::min(result_copy.cols - 1, max_loc.x + suppress_radius);
-                int y1 = std::min(result_copy.rows - 1, max_loc.y + suppress_radius);
-                result_copy(cv::Rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) = 0;
-            }
+            if (match.score > 0.90) break;
         }
     }
 
@@ -1156,17 +754,8 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
         int quarter_tmpl_diag = rotated_templates_quarter_[0].cols;
         int fb_coarse_step = 5;
 
-        cv::Mat fb_search_img = match_img;
-        int fb_offset_y = 0;
-        if (roi_y_center_ >= 0 && roi_y_margin_ > 0) {
-            int y_lo = std::max(0, roi_y_center_ - roi_y_margin_);
-            int y_hi = std::min(match_img.rows, roi_y_center_ + roi_y_margin_);
-            fb_offset_y = y_lo;
-            fb_search_img = match_img(cv::Rect(0, y_lo, match_img.cols, y_hi - y_lo)).clone();
-        }
-
         cv::Mat search_small;
-        cv::resize(fb_search_img, search_small,
+        cv::resize(match_img, search_small,
                    cv::Size(), 1.0 / scale, 1.0 / scale, cv::INTER_AREA);
 
         int fb_best_angle = 0;
@@ -1192,7 +781,7 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
 
         if (fb_best_score > match_threshold_ * 0.3) {
             int coarse_cx = static_cast<int>((fb_best_loc.x + quarter_tmpl_diag / 2.0) * scale);
-            int coarse_cy = static_cast<int>((fb_best_loc.y + quarter_tmpl_diag / 2.0) * scale) + fb_offset_y;
+            int coarse_cy = static_cast<int>((fb_best_loc.y + quarter_tmpl_diag / 2.0) * scale);
 
             int fb_half = tmpl_diag / 2 + scale * 8;
             cv::Rect fb_roi(
@@ -1204,8 +793,7 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
 
             double fb_fine_score = 0.0;
             int fb_fine_angle = fb_best_angle;
-            cv::Point2d fb_fine_center(coarse_cx, coarse_cy);
-            cv::Mat fb_fine_result;
+            cv::Point fb_fine_center(coarse_cx, coarse_cy);
 
             if (!rotated_templates_half_.empty() &&
                 fb_roi.width >= tmpl_diag && fb_roi.height >= tmpl_diag) {
@@ -1233,16 +821,14 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
                         fb_fine_score = max_val;
                         fb_fine_angle = norm_angle;
                         best_fine_loc = max_loc;
-                        fb_fine_result = match_result_buf_.clone();
                     }
                 }
 
                 if (fb_fine_score > 0.0) {
-                    double half_tmpl_center = half_tmpl_size / 2.0;
-                    cv::Point2d sub_loc = subPixelRefine(fb_fine_result, best_fine_loc);
-                    fb_fine_center = cv::Point2d(
-                        fb_roi.x + (sub_loc.x + half_tmpl_center) * 2,
-                        fb_roi.y + (sub_loc.y + half_tmpl_center) * 2
+                    int half_tmpl_center = half_tmpl_size / 2;
+                    fb_fine_center = cv::Point(
+                        fb_roi.x + (best_fine_loc.x + half_tmpl_center) * 2,
+                        fb_roi.y + (best_fine_loc.y + half_tmpl_center) * 2
                     );
                 }
             } else {
@@ -1254,60 +840,18 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
                           << " 角度=" << fb_fine_angle
                           << " 位置=(" << fb_fine_center.x << "," << fb_fine_center.y << ")" << std::endl;
                 last_best_score_ = fb_fine_score;
-            }
-
-            if (fb_fine_score >= match_threshold_ && !rotated_templates_quarter_.empty()) {
-                const cv::Mat& fb_best_tmpl_q = rotated_templates_quarter_[fb_fine_angle];
-                int fb_suppress_radius_q = fb_best_tmpl_q.cols / 2;
-                double fb_half_tmpl_q = fb_best_tmpl_q.cols / 2.0;
-
-                cv::Mat fb_full_result;
-                cv::matchTemplate(search_small, fb_best_tmpl_q, fb_full_result, cv::TM_CCOEFF_NORMED);
-
-                cv::Mat fb_result_copy = fb_full_result.clone();
-                int fb_max_objects = 20;
-
-                detections.clear();
-                for (int i = 0; i < fb_max_objects; ++i) {
-                    double max_val;
-                    cv::Point max_loc;
-                    cv::minMaxLoc(fb_result_copy, nullptr, &max_val, nullptr, &max_loc);
-
-                    if (max_val < match_threshold_) break;
-
-                    if (max_val > last_best_score_) {
-                        last_best_score_ = max_val;
-                    }
-
-                    cv::Point2d sub_loc = subPixelRefine(fb_full_result, max_loc);
-
+                if (fb_fine_score >= match_threshold_) {
+                    detections.clear();
                     DetResult det;
-                    det.x = (sub_loc.x + fb_half_tmpl_q) * scale;
-                    det.y = (sub_loc.y + fb_half_tmpl_q) * scale + fb_offset_y;
+                    det.x = fb_fine_center.x;
+                    det.y = fb_fine_center.y;
                     int image_angle = ((360 - fb_fine_angle) % 360 + 360) % 360;
                     int grip_angle = image_angle % 180;
                     if (grip_angle >= 90) grip_angle -= 180;
                     det.angle = grip_angle;
-                    det.score = max_val;
+                    det.score = fb_fine_score;
                     detections.push_back(det);
-
-                    int x0 = std::max(0, max_loc.x - fb_suppress_radius_q);
-                    int y0 = std::max(0, max_loc.y - fb_suppress_radius_q);
-                    int x1 = std::min(fb_result_copy.cols - 1, max_loc.x + fb_suppress_radius_q);
-                    int y1 = std::min(fb_result_copy.rows - 1, max_loc.y + fb_suppress_radius_q);
-                    fb_result_copy(cv::Rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) = 0;
                 }
-            } else if (fb_fine_score >= match_threshold_) {
-                detections.clear();
-                DetResult det;
-                det.x = fb_fine_center.x;
-                det.y = fb_fine_center.y;
-                int image_angle = ((360 - fb_fine_angle) % 360 + 360) % 360;
-                int grip_angle = image_angle % 180;
-                if (grip_angle >= 90) grip_angle -= 180;
-                det.angle = grip_angle;
-                det.score = fb_fine_score;
-                detections.push_back(det);
             }
         }
     }
@@ -1315,6 +859,7 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
     auto t_match_end = std::chrono::high_resolution_clock::now();
     double match_ms = std::chrono::duration<double, std::milli>(t_match_end - t_match_start).count();
 
+    // 4. 距离 NMS (模版对角线长度的一半作为最小距离)
     auto t_nms_start = std::chrono::high_resolution_clock::now();
     std::vector<DetResult> final_results;
     if (detections.size() <= 1) {
@@ -1322,6 +867,9 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
     } else {
         double min_nms_dist = rotated_templates_[0].cols * 0.4;
         final_results = distanceNMS(detections, min_nms_dist);
+        if (final_results.size() > 1) {
+            final_results.resize(1);
+        }
     }
     auto t_nms_end = std::chrono::high_resolution_clock::now();
     double nms_ms = std::chrono::duration<double, std::milli>(t_nms_end - t_nms_start).count();
@@ -1347,12 +895,6 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
               << "(分割=" << seg_ms << "ms, 匹配=" << match_ms << "ms, NMS=" << nms_ms << "ms) "
               << "候选=" << candidates.size() << " 匹配=" << final_results.size()
               << " 最高分=" << last_best_score_ << std::endl;
-    for (size_t i = 0; i < final_results.size(); ++i) {
-        std::cout << "[模版检测]   #" << i << " x=" << final_results[i].x
-                  << " y=" << final_results[i].y
-                  << " angle=" << final_results[i].angle
-                  << " score=" << final_results[i].score << std::endl;
-    }
 
     return result;
 }
@@ -1393,7 +935,7 @@ bool OpenCvTemplateDetector::saveAnnotated(const Frame& frame, const std::string
 
         // 绘制文本标签
         char label[128];
-        snprintf(label, sizeof(label), "#%zu x=%.4f y=%.4f a=%d s=%.2f",
+        snprintf(label, sizeof(label), "#%zu x=%.1f y=%.1f a=%d s=%.2f",
                  i, det.x, det.y, det.angle, det.score);
 
         cv::Point text_pos(center.x + 15, center.y - 10);
@@ -1408,44 +950,6 @@ bool OpenCvTemplateDetector::saveAnnotated(const Frame& frame, const std::string
     }
 
     return cv::imwrite(path, image);
-}
-
-void OpenCvTemplateDetector::drawAnnotations(cv::Mat& image) {
-    for (size_t i = 0; i < last_results_.size(); ++i) {
-        const auto& det = last_results_[i];
-
-        cv::RotatedRect rrect(
-            cv::Point2f(static_cast<float>(det.x), static_cast<float>(det.y)),
-            cv::Size2f(static_cast<float>(template_img_.cols),
-                       static_cast<float>(template_img_.rows)),
-            static_cast<float>(det.angle)
-        );
-
-        cv::Point2f vertices[4];
-        rrect.points(vertices);
-        for (int j = 0; j < 4; ++j) {
-            cv::line(image, vertices[j], vertices[(j + 1) % 4],
-                     cv::Scalar(0, 255, 0), 2);
-        }
-
-        int cs = 15;
-        cv::Point center(static_cast<int>(det.x), static_cast<int>(det.y));
-        cv::line(image, cv::Point(center.x - cs, center.y),
-                 cv::Point(center.x + cs, center.y), cv::Scalar(0, 0, 255), 2);
-        cv::line(image, cv::Point(center.x, center.y - cs),
-                 cv::Point(center.x, center.y + cs), cv::Scalar(0, 0, 255), 2);
-
-        char idx_label[32];
-        std::snprintf(idx_label, sizeof(idx_label), "#%zu", i);
-        cv::putText(image, idx_label, cv::Point(center.x + 10, center.y - 10),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
-
-        char coord_label[64];
-        std::snprintf(coord_label, sizeof(coord_label),
-                      "(%.4f, %.4f, a=%.4f)", det.x, det.y, static_cast<double>(det.angle));
-        cv::putText(image, coord_label, cv::Point(center.x + 10, center.y + 15),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 255), 1);
-    }
 }
 
 bool OpenCvTemplateDetector::loadTemplateInfo() {

@@ -6,7 +6,9 @@
 #include "opencv_template_detector.h"
 #include "edge_gradient_detector.h"
 #include "conveyor_detector.h"
+#ifdef HAS_ONNX
 #include "yolo_detector.h"
+#endif
 #include "object_info.h"
 #include "frame_queue.h"
 
@@ -102,8 +104,6 @@ static std::unique_ptr<Detector> createDetector(const DetectorConfig& cfg) {
         } else if (cfg.segment_mode == "gradient") {
             cv_det->setGradientThreshold(cfg.grad_threshold);
         }
-        if (cfg.roi_y_center >= 0) cv_det->setRoiYCenter(cfg.roi_y_center);
-        if (cfg.roi_y_margin >= 0) cv_det->setRoiYMargin(cfg.roi_y_margin);
         return std::unique_ptr<Detector>(cv_det);
     } else if (cfg.detector == "edge_gradient") {
         auto* eg_det = new EdgeGradientDetector(cfg.template_dir, cfg.match_threshold);
@@ -120,11 +120,14 @@ static std::unique_ptr<Detector> createDetector(const DetectorConfig& cfg) {
         auto* conv_det = new ConveyorDetector(cfg.template_dir, cfg.match_threshold);
         if (cfg.roi_y_center >= 0) conv_det->setRoiYCenter(cfg.roi_y_center);
         if (cfg.roi_y_margin >= 0) conv_det->setRoiYMargin(cfg.roi_y_margin);
-        if (!cfg.bg_ref_path.empty()) conv_det->setBgRefPath(cfg.bg_ref_path);
-        conv_det->setVerifyWithTemplate(cfg.verify_with_template);
         return std::unique_ptr<Detector>(conv_det);
     } else if (cfg.detector == "yolo") {
+#ifdef HAS_ONNX
         return std::make_unique<YoloDetector>(cfg.model_path, 0.5f, 0.45f);
+#else
+        std::cerr << "[错误] YOLO 检测器需要 ONNX Runtime，请使用 -DUSE_ONNX=ON 重新编译" << std::endl;
+        return nullptr;
+#endif
     }
 
     std::cerr << "[错误] 未知的检测器类型: " << cfg.detector << std::endl;
@@ -143,7 +146,9 @@ static std::string makeConfigSummary(const DetectorConfig& cfg) {
         << ",roi_y_center=" << cfg.roi_y_center
         << ",roi_y_margin=" << cfg.roi_y_margin;
     if (cfg.detector == "yolo") {
+#ifdef HAS_ONNX
         oss << ",model_path=" << cfg.model_path;
+#endif
     }
     if (cfg.detector == "conveyor") {
         oss << ",bg_ref_path=" << cfg.bg_ref_path

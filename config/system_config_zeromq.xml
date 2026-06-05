@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<opencv_storage>
+<!-- ===== ZeroMQ 传输配置 ===== -->
+<transport>zeromq</transport>
+
+<!-- ZMQ 不使用 domain_id，留空即可 -->
+<domain_id></domain_id>
+
+<!-- ZMQ pub/sub 基础端口，topic 端口 = base_port + hash(topic) % 10 -->
+<!-- service 端口 = base_port + 10 + hash(endpoint) % 100 -->
+<base_port>5550</base_port>
+
+<!-- 帧发布/订阅 topic (camera_node -> detector_node) -->
+<topic_frame>vision/frame</topic_frame>
+
+<!-- 检测结果发布/订阅 topic (detector_node -> comm_node) -->
+<topic_detection>vision/detection</topic_detection>
+</opencv_storage>

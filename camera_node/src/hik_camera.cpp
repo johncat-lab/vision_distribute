@@ -1,7 +1,7 @@
 #include "hik_camera.h"
 #include <cstring>
-#include <string>
-#include <utility>
+
+// ========== 构造函数 / 析构函数 ==========
 
 HikCamera::HikCamera() {}
 
@@ -9,7 +9,9 @@ HikCamera::~HikCamera() {
     close();
 }
 
-bool HikCamera::enumDevices(std::vector<CameraDeviceInfo>& devices) {
+// ========== 设备管理 ==========
+
+bool HikCamera::enumDevices(std::vector<MV_CC_DEVICE_INFO>& devices) {
     devices.clear();
 
     MV_CC_DEVICE_INFO_LIST devList;
@@ -28,20 +30,7 @@ bool HikCamera::enumDevices(std::vector<CameraDeviceInfo>& devices) {
 
     for (unsigned int i = 0; i < devList.nDeviceNum; ++i) {
         if (devList.pDeviceInfo[i] != nullptr) {
-            CameraDeviceInfo info;
-            info.index = static_cast<int>(i);
-
-            if (devList.pDeviceInfo[i]->nTLayerType == MV_GIGE_DEVICE) {
-                info.transport_type = "GigE";
-                info.model_name = reinterpret_cast<const char*>(devList.pDeviceInfo[i]->SpecialInfo.stGigEInfo.chModelName);
-                info.serial_number = reinterpret_cast<const char*>(devList.pDeviceInfo[i]->SpecialInfo.stGigEInfo.chSerialNumber);
-            } else if (devList.pDeviceInfo[i]->nTLayerType == MV_USB_DEVICE) {
-                info.transport_type = "USB3";
-                info.model_name = reinterpret_cast<const char*>(devList.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo.chModelName);
-                info.serial_number = reinterpret_cast<const char*>(devList.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo.chSerialNumber);
-            }
-
-            devices.push_back(info);
+            devices.push_back(*devList.pDeviceInfo[i]);
         }
     }
 
@@ -55,6 +44,7 @@ bool HikCamera::open(int deviceIndex) {
         return false;
     }
 
+    // 枚举设备
     MV_CC_DEVICE_INFO_LIST devList;
     memset(&devList, 0, sizeof(MV_CC_DEVICE_INFO_LIST));
 
@@ -75,6 +65,7 @@ bool HikCamera::open(int deviceIndex) {
         return false;
     }
 
+    // 创建设备句柄
     ret = MV_CC_CreateHandle(&handle_, devList.pDeviceInfo[deviceIndex]);
     if (MV_OK != ret) {
         printError("CreateHandle", ret);
@@ -82,6 +73,7 @@ bool HikCamera::open(int deviceIndex) {
         return false;
     }
 
+    // 打开设备
     ret = MV_CC_OpenDevice(handle_, MV_ACCESS_Exclusive, 0);
     if (MV_OK != ret) {
         printError("OpenDevice", ret);
@@ -90,15 +82,18 @@ bool HikCamera::open(int deviceIndex) {
         return false;
     }
 
+    // 保存设备信息
     device_info_ = *devList.pDeviceInfo[deviceIndex];
     has_device_info_ = true;
 
     is_open_.store(true);
     std::cout << "[海康相机] 设备已打开: " << getDeviceInfoString() << std::endl;
 
+    // 注册图像回调
     ret = MV_CC_RegisterImageCallBackEx(handle_, imageCallbackBridge, this);
     if (MV_OK != ret) {
         printError("RegisterImageCallBackEx", ret);
+        // 非致命错误，继续
     }
 
     return true;
@@ -125,6 +120,8 @@ void HikCamera::close() {
 bool HikCamera::isOpen() const {
     return is_open_.load();
 }
+
+// ========== 取流控制 ==========
 
 bool HikCamera::startGrabbing() {
     if (!is_open_.load()) {
@@ -170,11 +167,13 @@ bool HikCamera::isGrabbing() const {
     return is_grabbing_.load();
 }
 
-void HikCamera::setImageCallback(ImageCallback callback) {
+void HikCamera::setImageCallback(HikImageCallback callback) {
     image_callback_ = callback;
 }
 
-bool HikCamera::setExposureAuto(ExposureAuto mode) {
+// ========== 参数配置 ==========
+
+bool HikCamera::setExposureAuto(HikExposureAuto mode) {
     if (!is_open_.load()) {
         std::cerr << "[海康相机] 设备未打开" << std::endl;
         return false;
@@ -182,9 +181,9 @@ bool HikCamera::setExposureAuto(ExposureAuto mode) {
 
     unsigned int value = 0;
     switch (mode) {
-        case ExposureAuto::OFF:        value = MV_EXPOSURE_AUTO_MODE_OFF;        break;
-        case ExposureAuto::ONCE:       value = MV_EXPOSURE_AUTO_MODE_ONCE;       break;
-        case ExposureAuto::CONTINUOUS: value = MV_EXPOSURE_AUTO_MODE_CONTINUOUS; break;
+        case HikExposureAuto::OFF:        value = MV_EXPOSURE_AUTO_MODE_OFF;        break;
+        case HikExposureAuto::ONCE:       value = MV_EXPOSURE_AUTO_MODE_ONCE;       break;
+        case HikExposureAuto::CONTINUOUS: value = MV_EXPOSURE_AUTO_MODE_CONTINUOUS; break;
     }
 
     int ret = MV_CC_SetEnumValue(handle_, "ExposureAuto", value);
@@ -213,7 +212,7 @@ bool HikCamera::setExposureTime(float exposureTimeUs) {
     return true;
 }
 
-bool HikCamera::setGainAuto(GainAuto mode) {
+bool HikCamera::setGainAuto(HikGainAuto mode) {
     if (!is_open_.load()) {
         std::cerr << "[海康相机] 设备未打开" << std::endl;
         return false;
@@ -221,9 +220,9 @@ bool HikCamera::setGainAuto(GainAuto mode) {
 
     unsigned int value = 0;
     switch (mode) {
-        case GainAuto::OFF:        value = MV_GAIN_MODE_OFF;        break;
-        case GainAuto::ONCE:       value = MV_GAIN_MODE_ONCE;       break;
-        case GainAuto::CONTINUOUS: value = MV_GAIN_MODE_CONTINUOUS; break;
+        case HikGainAuto::OFF:        value = MV_GAIN_MODE_OFF;        break;
+        case HikGainAuto::ONCE:       value = MV_GAIN_MODE_ONCE;       break;
+        case HikGainAuto::CONTINUOUS: value = MV_GAIN_MODE_CONTINUOUS; break;
     }
 
     int ret = MV_CC_SetEnumValue(handle_, "GainAuto", value);
@@ -252,13 +251,13 @@ bool HikCamera::setGain(float gain) {
     return true;
 }
 
-bool HikCamera::setTriggerMode(TriggerMode mode) {
+bool HikCamera::setTriggerMode(HikTriggerMode mode) {
     if (!is_open_.load()) {
         std::cerr << "[海康相机] 设备未打开" << std::endl;
         return false;
     }
 
-    unsigned int value = (mode == TriggerMode::ON) ? MV_TRIGGER_MODE_ON : MV_TRIGGER_MODE_OFF;
+    unsigned int value = (mode == HikTriggerMode::ON) ? MV_TRIGGER_MODE_ON : MV_TRIGGER_MODE_OFF;
 
     int ret = MV_CC_SetEnumValue(handle_, "TriggerMode", value);
     if (MV_OK != ret) {
@@ -270,7 +269,7 @@ bool HikCamera::setTriggerMode(TriggerMode mode) {
     return true;
 }
 
-bool HikCamera::setTriggerSource(TriggerSource source) {
+bool HikCamera::setTriggerSource(HikTriggerSource source) {
     if (!is_open_.load()) {
         std::cerr << "[海康相机] 设备未打开" << std::endl;
         return false;
@@ -278,10 +277,10 @@ bool HikCamera::setTriggerSource(TriggerSource source) {
 
     unsigned int value = MV_TRIGGER_SOURCE_SOFTWARE;
     switch (source) {
-        case TriggerSource::LINE0:     value = MV_TRIGGER_SOURCE_LINE0;     break;
-        case TriggerSource::LINE1:     value = MV_TRIGGER_SOURCE_LINE1;     break;
-        case TriggerSource::LINE2:     value = MV_TRIGGER_SOURCE_LINE2;     break;
-        case TriggerSource::SOFTWARE:  value = MV_TRIGGER_SOURCE_SOFTWARE;  break;
+        case HikTriggerSource::LINE0:     value = MV_TRIGGER_SOURCE_LINE0;     break;
+        case HikTriggerSource::LINE1:     value = MV_TRIGGER_SOURCE_LINE1;     break;
+        case HikTriggerSource::LINE2:     value = MV_TRIGGER_SOURCE_LINE2;     break;
+        case HikTriggerSource::SOFTWARE:  value = MV_TRIGGER_SOURCE_SOFTWARE;  break;
     }
 
     int ret = MV_CC_SetEnumValue(handle_, "TriggerSource", value);
@@ -347,87 +346,13 @@ bool HikCamera::setPixelFormat(const std::string& format) {
         return false;
     }
 
-    static const std::vector<std::pair<std::string, unsigned int>> format_map = {
-        {"Mono8",     0x01080001},
-        {"Mono10",    0x01100003},
-        {"Mono12",    0x01100005},
-        {"BayerGB8",  0x01080005},
-        {"BayerGB10", 0x0110000D},
-        {"BayerGB12", 0x01100015},
-        {"BGR8",      0x02180015},
-        {"RGB8",      0x02180014},
-    };
-
-    MVCC_ENUMVALUE stEnumVal;
-    memset(&stEnumVal, 0, sizeof(MVCC_ENUMVALUE));
-    int ret = MV_CC_GetEnumValue(handle_, "PixelFormat", &stEnumVal);
-    if (MV_OK == ret) {
-        std::cout << "[海康相机] 当前像素格式: 0x" << std::hex << stEnumVal.nCurValue << std::dec << std::endl;
-        std::cout << "[海康相机] 支持的像素格式 (" << stEnumVal.nSupportedNum << "):";
-        for (unsigned int i = 0; i < stEnumVal.nSupportedNum && i < MV_MAX_XML_SYMBOLIC_NUM; ++i) {
-            std::cout << " 0x" << std::hex << stEnumVal.nSupportValue[i] << std::dec;
-        }
-        std::cout << std::endl;
+    int ret = MV_CC_SetEnumValueByString(handle_, "PixelFormat", format.c_str());
+    if (MV_OK != ret) {
+        printError("Set PixelFormat", ret);
+        return false;
     }
 
-    unsigned int format_value = 0;
-    bool found = false;
-    for (const auto& entry : format_map) {
-        if (format == entry.first) {
-            format_value = entry.second;
-            found = true;
-            break;
-        }
-    }
-
-    bool set_ok = false;
-    if (found) {
-        if (MV_OK == ret) {
-            bool supported = false;
-            for (unsigned int i = 0; i < stEnumVal.nSupportedNum && i < MV_MAX_XML_SYMBOLIC_NUM; ++i) {
-                if (stEnumVal.nSupportValue[i] == format_value) {
-                    supported = true;
-                    break;
-                }
-            }
-            if (!supported) {
-                std::cerr << "[海康相机] 相机不支持像素格式: " << format
-                          << " (0x" << std::hex << format_value << std::dec << ")" << std::endl;
-                return false;
-            }
-        }
-
-        int nret = MV_CC_SetEnumValue(handle_, "PixelFormat", format_value);
-        if (MV_OK == nret) {
-            set_ok = true;
-            std::cout << "[海康相机] 通过数值设置像素格式: " << format
-                      << " (0x" << std::hex << format_value << std::dec << ")" << std::endl;
-        } else {
-            printError("SetEnumValue PixelFormat (" + format + ", 0x" +
-                       std::to_string(format_value) + ")", nret);
-            std::cout << "[海康相机] 数值方式失败，尝试字符串方式..." << std::endl;
-        }
-    }
-
-    if (!set_ok) {
-        int nret = MV_CC_SetEnumValueByString(handle_, "PixelFormat", format.c_str());
-        if (MV_OK != nret) {
-            printError("SetEnumValueByString PixelFormat (" + format + ")", nret);
-            std::cerr << "[海康相机] 提示: 数值和字符串方式均失败，请确认相机支持该像素格式" << std::endl;
-            return false;
-        }
-        set_ok = true;
-    }
-
-    MVCC_ENUMVALUE stNewEnumVal;
-    memset(&stNewEnumVal, 0, sizeof(MVCC_ENUMVALUE));
-    int ret2 = MV_CC_GetEnumValue(handle_, "PixelFormat", &stNewEnumVal);
-    if (MV_OK == ret2) {
-        std::cout << "[海康相机] 像素格式已设置: " << format
-                  << " (0x" << std::hex << stNewEnumVal.nCurValue << std::dec << ")" << std::endl;
-    } else {
-        std::cout << "[海康相机] 像素格式已设置: " << format << std::endl;
-    }
+    std::cout << "[海康相机] 像素格式已设置: " << format << std::endl;
     return true;
 }
 
@@ -446,6 +371,8 @@ bool HikCamera::setFrameRate(float fps) {
     std::cout << "[海康相机] 帧率已设置: " << fps << " fps" << std::endl;
     return true;
 }
+
+// ========== 参数查询 ==========
 
 bool HikCamera::getExposureTime(float& exposureTimeUs) {
     if (!is_open_.load()) {
@@ -544,6 +471,8 @@ std::string HikCamera::getDeviceInfoString() const {
     return info;
 }
 
+// ========== 私有方法 ==========
+
 void __stdcall HikCamera::imageCallbackBridge(unsigned char* pData,
                                                MV_FRAME_OUT_INFO_EX* pstFrameInfo,
                                                void* pUser) {
@@ -555,7 +484,7 @@ void __stdcall HikCamera::imageCallbackBridge(unsigned char* pData,
 
 void HikCamera::onImageReceived(unsigned char* pData, MV_FRAME_OUT_INFO_EX* pstFrameInfo) {
     if (image_callback_) {
-        FrameInfo info;
+        HikFrameInfo info;
         info.data = pData;
         info.dataLen = pstFrameInfo->nFrameLen;
         info.width = pstFrameInfo->nWidth;
@@ -564,14 +493,6 @@ void HikCamera::onImageReceived(unsigned char* pData, MV_FRAME_OUT_INFO_EX* pstF
         info.frameNum = pstFrameInfo->nFrameNum;
         info.exposureTime = pstFrameInfo->fExposureTime;
         info.gain = pstFrameInfo->fGain;
-
-        static unsigned int last_pixel_type = 0;
-        if (info.pixelType != last_pixel_type) {
-            std::cout << "[海康相机] 像素格式变化: 0x" << std::hex << last_pixel_type
-                      << " -> 0x" << info.pixelType << std::dec
-                      << " (frame #" << info.frameNum << ")" << std::endl;
-            last_pixel_type = info.pixelType;
-        }
 
         image_callback_(info);
     }
@@ -586,6 +507,7 @@ bool HikCamera::saveImage(const std::string& filepath,
         return false;
     }
 
+    // 分配输出缓冲区 (BMP最大约为 width * height * 3 + 1024)
     unsigned int bufferSize = width * height * 4 + 2048;
     std::vector<unsigned char> buffer(bufferSize);
 
@@ -600,7 +522,7 @@ bool HikCamera::saveImage(const std::string& filepath,
     saveParam.nBufferSize   = bufferSize;
     saveParam.enImageType   = (format == 2) ? MV_Image_Jpeg : MV_Image_Bmp;
     saveParam.nJpgQuality   = 80;
-    saveParam.iMethodValue  = 1;
+    saveParam.iMethodValue  = 1;  // 双线性插值
 
     int ret = MV_CC_SaveImageEx2(handle_, &saveParam);
     if (MV_OK != ret) {
@@ -608,6 +530,7 @@ bool HikCamera::saveImage(const std::string& filepath,
         return false;
     }
 
+    // 写入文件
     FILE* fp = fopen(filepath.c_str(), "wb");
     if (fp == nullptr) {
         std::cerr << "[海康相机] 无法创建文件: " << filepath << std::endl;

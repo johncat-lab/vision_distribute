@@ -5,11 +5,12 @@ add_executable(camera_node
 
 target_include_directories(camera_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${HIK_SDK_INCLUDE_DIR}
 )
 
 target_link_libraries(camera_node PRIVATE
     vision_rpc
-    vision_core
+    ${HIK_MVCAMERACONTROL_LIB}
     ${OpenCV_LIBS}
 )
 

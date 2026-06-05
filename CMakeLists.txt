@@ -14,59 +14,69 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 # ========== 海康机器人 MVS SDK 配置 ==========
-if(UNIX AND NOT APPLE)
-    set(HIK_SDK_PATH_DEFAULT "/opt/MVS")
-else()
-    set(HIK_SDK_PATH_DEFAULT "/Library/MVS_SDK")
-endif()
-set(HIK_SDK_PATH "${HIK_SDK_PATH_DEFAULT}" CACHE PATH "Path to Hikrobot MVS SDK")
-if(UNIX AND NOT APPLE)
-    set(HIK_SDK_INCLUDE_DIR "${HIK_SDK_PATH}/include")
-else()
-    set(HIK_SDK_INCLUDE_DIR "${HIK_SDK_PATH}/Includes")
-endif()
-if(UNIX AND NOT APPLE)
-    set(HIK_SDK_LIB_DIR "${HIK_SDK_PATH}/lib/64")
-else()
-    set(HIK_SDK_LIB_DIR "${HIK_SDK_PATH}/lib")
-endif()
+option(USE_HIK "Build with Hikrobot MVS camera support" ON)
 
-find_library(HIK_MVCAMERACONTROL_LIB
-    NAMES MvCameraControl
-    PATHS ${HIK_SDK_LIB_DIR}
-    NO_DEFAULT_PATH
-)
+if(USE_HIK)
+    if(UNIX AND NOT APPLE)
+        set(HIK_SDK_PATH_DEFAULT "/opt/MVS")
+    else()
+        set(HIK_SDK_PATH_DEFAULT "/Library/MVS_SDK")
+    endif()
+    set(HIK_SDK_PATH "${HIK_SDK_PATH_DEFAULT}" CACHE PATH "Path to Hikrobot MVS SDK")
+    if(UNIX AND NOT APPLE)
+        set(HIK_SDK_INCLUDE_DIR "${HIK_SDK_PATH}/include")
+    else()
+        set(HIK_SDK_INCLUDE_DIR "${HIK_SDK_PATH}/Includes")
+    endif()
+    if(UNIX AND NOT APPLE)
+        set(HIK_SDK_LIB_DIR "${HIK_SDK_PATH}/lib/64")
+    else()
+        set(HIK_SDK_LIB_DIR "${HIK_SDK_PATH}/lib")
+    endif()
 
-if(NOT HIK_MVCAMERACONTROL_LIB)
-    message(FATAL_ERROR "未找到海康 MVS SDK 库，请确认安装路径: ${HIK_SDK_LIB_DIR}")
-endif()
+    find_library(HIK_MVCAMERACONTROL_LIB
+        NAMES MvCameraControl
+        PATHS ${HIK_SDK_LIB_DIR}
+        NO_DEFAULT_PATH
+    )
 
-message(STATUS "海康 SDK 路径: ${HIK_SDK_PATH}")
-message(STATUS "海康 SDK 库: ${HIK_MVCAMERACONTROL_LIB}")
-
-# ========== ONNX Runtime 配置 ==========
-if(UNIX AND NOT APPLE)
-    set(ORT_SDK_PATH_DEFAULT "${CMAKE_SOURCE_DIR}/deps/onnxruntime-linux-x64-1.17.3")
-else()
-    set(ORT_SDK_PATH_DEFAULT "${CMAKE_SOURCE_DIR}/deps/onnxruntime-osx-x86_64-1.17.3")
-endif()
-set(ORT_SDK_PATH "${ORT_SDK_PATH_DEFAULT}"
-    CACHE PATH "Path to ONNX Runtime x86_64 SDK")
-set(ORT_INCLUDE_DIR "${ORT_SDK_PATH}/include")
-set(ORT_LIB_DIR "${ORT_SDK_PATH}/lib")
-
-find_library(ORT_LIB
-    NAMES onnxruntime
-    PATHS ${ORT_LIB_DIR}
-    NO_DEFAULT_PATH
-)
-
-if(NOT ORT_LIB)
-    message(FATAL_ERROR "未找到 ONNX Runtime 库，请确认安装路径: ${ORT_LIB_DIR}")
+    if(NOT HIK_MVCAMERACONTROL_LIB)
+        message(WARNING "未找到海康 MVS SDK 库: ${HIK_SDK_LIB_DIR}，将跳过 camera_node")
+        set(USE_HIK OFF)
+    else()
+        message(STATUS "海康 SDK 路径: ${HIK_SDK_PATH}")
+        message(STATUS "海康 SDK 库: ${HIK_MVCAMERACONTROL_LIB}")
+    endif()
 endif()
 
-message(STATUS "ONNX Runtime 路径: ${ORT_SDK_PATH}")
-message(STATUS "ONNX Runtime 库: ${ORT_LIB}")
+# ========== ONNX Runtime 配置 (可选) ==========
+option(USE_ONNX "Build with ONNX Runtime YOLO support" ON)
+
+if(USE_ONNX)
+    if(UNIX AND NOT APPLE)
+        set(ORT_SDK_PATH_DEFAULT "${CMAKE_SOURCE_DIR}/deps/onnxruntime-linux-x64-1.17.3")
+    else()
+        set(ORT_SDK_PATH_DEFAULT "${CMAKE_SOURCE_DIR}/deps/onnxruntime-osx-x86_64-1.17.3")
+    endif()
+    set(ORT_SDK_PATH "${ORT_SDK_PATH_DEFAULT}"
+        CACHE PATH "Path to ONNX Runtime x86_64 SDK")
+    set(ORT_INCLUDE_DIR "${ORT_SDK_PATH}/include")
+    set(ORT_LIB_DIR "${ORT_SDK_PATH}/lib")
+
+    find_library(ORT_LIB
+        NAMES onnxruntime
+        PATHS ${ORT_LIB_DIR}
+        NO_DEFAULT_PATH
+    )
+
+    if(NOT ORT_LIB)
+        message(WARNING "未找到 ONNX Runtime 库: ${ORT_LIB_DIR}，将禁用 YOLO 检测器")
+        set(USE_ONNX OFF)
+    else()
+        message(STATUS "ONNX Runtime 路径: ${ORT_SDK_PATH}")
+        message(STATUS "ONNX Runtime 库: ${ORT_LIB}")
+    endif()
+endif()
 
 # ========== NCNN 配置 (可选) ==========
 option(USE_NCNN "Build with NCNN inference backend" ON)
@@ -141,8 +151,22 @@ if(USE_OPENCV)
 endif()
 
 # ========== ZeroMQ 配置 ==========
-find_package(cppzmq REQUIRED)
-message(STATUS "ZeroMQ (cppzmq) 已找到")
+find_package(cppzmq QUIET)
+if(NOT cppzmq_FOUND)
+    # Fallback: 手动查找 zmq.hpp 和 libzmq
+    find_path(ZMQ_HEADER zmq.hpp PATHS /usr/include /usr/local/include)
+    find_library(ZMQ_LIB zmq PATHS /usr/lib /usr/local/lib)
+    if(ZMQ_HEADER AND ZMQ_LIB)
+        message(STATUS "ZeroMQ: 手动找到 zmq.hpp (${ZMQ_HEADER}) + libzmq (${ZMQ_LIB})")
+        add_library(cppzmq INTERFACE)
+        target_include_directories(cppzmq INTERFACE ${ZMQ_HEADER})
+        target_link_libraries(cppzmq INTERFACE ${ZMQ_LIB})
+    else()
+        message(FATAL_ERROR "未找到 ZeroMQ，请安装 libzmq3-dev 和 cppzmq-dev: sudo apt install libzmq3-dev cppzmq-dev")
+    endif()
+else()
+    message(STATUS "ZeroMQ (cppzmq) 已找到")
+endif()
 
 # ========== Zenoh 配置 (可选) ==========
 find_package(zenohc QUIET)
@@ -163,12 +187,15 @@ endif()
 # ========== 构建选项 ==========
 option(BUILD_GUI "Build Qt6 GUI manager application" OFF)
 
-# ========== 添加 core 子目录 ==========
-add_subdirectory(core)
-
 # ========== 添加子目录 ==========
 add_subdirectory(rpc)
-add_subdirectory(camera_node)
+
+if(USE_HIK)
+    add_subdirectory(camera_node)
+else()
+    message(STATUS "camera_node 已跳过 (需要海康 MVS SDK，可通过 -DUSE_HIK=OFF 禁用)")
+endif()
+
 add_subdirectory(detector_node)
 add_subdirectory(comm_node)
 

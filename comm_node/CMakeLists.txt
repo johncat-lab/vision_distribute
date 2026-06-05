@@ -10,7 +10,6 @@ target_include_directories(comm_node PRIVATE
 
 target_link_libraries(comm_node PRIVATE
     vision_rpc
-    vision_core
     ${OpenCV_LIBS}
 )
 

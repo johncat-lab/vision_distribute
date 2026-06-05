@@ -3,6 +3,21 @@
 #include <iostream>
 #include <stdexcept>
 
+// 各后端的全局初始化函数声明
+#ifdef HAS_ROS2
+namespace ros2_global {
+    void init(const std::string& node_name);
+    void shutdown();
+}
+#endif
+
+#ifdef HAS_ZENOH
+namespace zenoh_global {
+    void init();
+    void shutdown();
+}
+#endif
+
 NodeFactory::NodeFactory(const NodeConfig& config)
     : config_(config) {
     switch (config_.transport) {
@@ -12,9 +27,19 @@ NodeFactory::NodeFactory(const NodeConfig& config)
         break;
     }
     case TransportType::ZENOH:
-        throw std::runtime_error("Zenoh transport not yet implemented");
+#ifdef HAS_ZENOH
+        zenoh_global::init();
+#else
+        throw std::runtime_error("Zenoh backend not available (rebuild with zenohc)");
+#endif
+        break;
     case TransportType::ROS2:
-        throw std::runtime_error("ROS2 transport not yet implemented");
+#ifdef HAS_ROS2
+        ros2_global::init(config.node_name.empty() ? "vision_node" : config.node_name);
+#else
+        throw std::runtime_error("ROS2 backend not available (rebuild with rclcpp)");
+#endif
+        break;
     }
 }
 
@@ -26,7 +51,14 @@ NodeFactory::~NodeFactory() {
         break;
     }
     case TransportType::ZENOH:
+#ifdef HAS_ZENOH
+        zenoh_global::shutdown();
+#endif
+        break;
     case TransportType::ROS2:
+#ifdef HAS_ROS2
+        ros2_global::shutdown();
+#endif
         break;
     }
 }

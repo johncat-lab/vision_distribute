@@ -1,13 +1,25 @@
 <?xml version="1.0"?>
 <opencv_storage>
+<!-- ===== 系统传输配置 (默认: ZeroMQ) ===== -->
+<!-- 可选值: zeromq | ros2 | zenoh -->
+<!-- 如需切换到 ROS2 或 Zenoh，可将 transport 改为对应值 -->
+<!-- 或直接使用 system_config_ros2.xml / system_config_zenoh.xml -->
 <transport>zeromq</transport>
+
+<!-- domain_id 语义取决于传输方式: -->
+<!--   ZMQ:   留空 (不使用) -->
+<!--   ROS2:  domain ID (0~101)，用于隔离 ROS2 网络 -->
+<!--   Zenoh: router 地址，如 tcp/192.168.1.100:7447，留空为 peer-to-peer 模式 -->
 <domain_id></domain_id>
+
+<!-- ZMQ 基础端口 (仅 ZeroMQ 使用) -->
+<!-- topic 端口 = base_port + hash(topic) % 10 -->
+<!-- service 端口 = base_port + 10 + hash(endpoint) % 100 -->
 <base_port>5550</base_port>
+
+<!-- 帧发布/订阅 topic (camera_node -> detector_node) -->
 <topic_frame>vision/frame</topic_frame>
+
+<!-- 检测结果发布/订阅 topic (detector_node -> comm_node) -->
 <topic_detection>vision/detection</topic_detection>
-<zmq_pub_sub_port>5550</zmq_pub_sub_port>
-<zmq_service_base_port>5560</zmq_service_base_port>
-<camera_service_port>5560</camera_service_port>
-<detector_service_port>5561</detector_service_port>
-<comm_service_port>5562</comm_service_port>
 </opencv_storage>

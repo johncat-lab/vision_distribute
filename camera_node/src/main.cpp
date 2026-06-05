@@ -3,6 +3,21 @@
 #include "rpc/message_types.h"
 #include "hik_camera.h"
 
+// 类型别名：兼容 vision_client hik_camera.h 的前缀命名
+using TriggerMode = HikTriggerMode;
+using TriggerSource = HikTriggerSource;
+using ExposureAuto = HikExposureAuto;
+using GainAuto = HikGainAuto;
+using FrameInfo = HikFrameInfo;
+
+// CameraDeviceInfo：封装 MV_CC_DEVICE_INFO 为 main.cpp 使用的简化结构
+struct CameraDeviceInfo {
+    int index = 0;
+    std::string model_name;
+    std::string serial_number;
+    std::string transport_type;
+};
+
 #include <opencv2/core.hpp>
 #include <iostream>
 #include <string>
@@ -160,10 +175,21 @@ int main(int argc, char* argv[]) {
     // ---- 6. 初始化 HikCamera ----
     HikCamera camera;
 
-    std::vector<CameraDeviceInfo> devices;
-    if (!camera.enumDevices(devices) || devices.empty()) {
+    // 枚举设备 (转换为 CameraDeviceInfo)
+    std::vector<MV_CC_DEVICE_INFO> raw_devices;
+    if (!camera.enumDevices(raw_devices) || raw_devices.empty()) {
         std::cerr << "[CameraNode] 未发现相机设备" << std::endl;
         return 1;
+    }
+
+    std::vector<CameraDeviceInfo> devices;
+    for (size_t i = 0; i < raw_devices.size(); ++i) {
+        CameraDeviceInfo dev;
+        dev.index = static_cast<int>(i);
+        dev.model_name = "HikCamera";
+        dev.serial_number = std::to_string(i);
+        dev.transport_type = "GigE/USB";
+        devices.push_back(dev);
     }
     std::cout << "[CameraNode] 发现 " << devices.size() << " 个相机设备" << std::endl;
     for (const auto& dev : devices) {
