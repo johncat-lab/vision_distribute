@@ -203,6 +203,9 @@ if(BUILD_GUI)
     add_subdirectory(manager)
 endif()
 
+# ========== 通信验证测试 ==========
+add_subdirectory(tests)
+
 # ========== 安装配置文件 ==========
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/config/
     DESTINATION config

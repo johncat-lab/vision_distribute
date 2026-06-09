@@ -12,6 +12,8 @@
 #include <QTimer>
 #include <QMutex>
 
+#include <atomic>
+
 #include <opencv2/core.hpp>
 
 #include "rpc/node_factory.h"
@@ -28,21 +30,35 @@ private slots:
     void onUpdateDisplay();
     void onRefreshStatus();
 
+    // Camera
     void onCameraSetExposure();
     void onCameraSetGain();
     void onCameraSetTriggerMode();
     void onCameraSoftTrigger();
     void onCameraGetConfig();
 
+    // Detector
+    void onDetectorSetThreshold();
+    void onDetectorSetSegmentMode();
+    void onDetectorSetVThreshold();
+    void onDetectorSetGradThreshold();
     void onDetectorGetConfig();
+    void onDetectorReloadTemplate();
 
-    void onCommSetConfig();
+    // Comm
+    void onCommSetHost();
+    void onCommSetPort();
+    void onCommSetMode();
     void onCommGetConfig();
     void onCommGetStatus();
 
 private:
     void setupUI();
     void setupRPC(const std::string& config_path);
+    void initUIFromNodes();
+    void parseAndApplyCameraConfig(const std::string& data);
+    void parseAndApplyDetectorConfig(const std::string& data);
+    void parseAndApplyCommConfig(const std::string& data);
     void updateImageDisplay(const cv::Mat& mat);
     void overlayDetections(cv::Mat& mat, const DetectionMsg& msg);
     void callService(const std::string& service_name,
@@ -79,7 +95,12 @@ private:
     QTextEdit* text_camera_info_;
 
     // Detector config panel
+    QDoubleSpinBox* spin_match_threshold_;
+    QComboBox* combo_segment_mode_;
+    QSpinBox* spin_v_threshold_;
+    QSpinBox* spin_grad_threshold_;
     QTextEdit* text_detector_info_;
+    QPushButton* btn_reload_template_;
 
     // Communication config panel
     QLineEdit* edit_comm_host_;
@@ -95,4 +116,9 @@ private:
     // Timers
     QTimer* display_timer_;
     QTimer* status_timer_;
+
+    // Async call guards (防止并发的服务调用堆积)
+    std::atomic<bool> camera_call_pending_{false};
+    std::atomic<bool> detector_call_pending_{false};
+    std::atomic<bool> comm_call_pending_{false};
 };

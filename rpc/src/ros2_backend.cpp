@@ -8,67 +8,67 @@
 #include <mutex>
 #include <stdexcept>
 #include <iostream>
+#include <chrono>
 
 namespace ros2_global {
 
 static std::shared_ptr<rclcpp::Node> g_node;
-static std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> g_executor;
+static std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> g_executor;
 static std::thread g_spin_thread;
 static std::atomic<bool> g_running{false};
-static std::once_flag g_init_flag;
+static std::mutex g_init_mutex;
+static bool g_initialized = false;
 
 void init(const std::string& node_name) {
-    std::call_once(g_init_flag, [&node_name]() {
-        // 初始化 rclcpp（仅首次调用生效）
-        if (!rclcpp::ok()) {
-            rclcpp::init(0, nullptr);
+    std::lock_guard<std::mutex> lock(g_init_mutex);
+    if (g_initialized) return;
+
+    if (!rclcpp::ok()) {
+        rclcpp::init(0, nullptr);
+    }
+
+    rclcpp::NodeOptions options;
+    options.use_intra_process_comms(false);
+    g_node = std::make_shared<rclcpp::Node>(node_name, options);
+
+    g_executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(
+        rclcpp::ExecutorOptions{}, 2);
+    g_executor->add_node(g_node);
+
+    g_running.store(true);
+    g_spin_thread = std::thread([]() {
+        std::cerr << "[ROS2] spin thread started, tid="
+                  << std::this_thread::get_id() << std::endl;
+        try {
+            g_executor->spin();
+        } catch (const std::exception& e) {
+            std::cerr << "[ROS2] executor spin error: " << e.what() << std::endl;
         }
-
-        // 创建节点
-        rclcpp::NodeOptions options;
-        options.use_intra_process_comms(true);
-        g_node = std::make_shared<rclcpp::Node>(node_name, options);
-
-        // 创建 executor 并添加节点
-        g_executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
-        g_executor->add_node(g_node);
-
-        // 在后台线程中 spin
-        g_running.store(true);
-        g_spin_thread = std::thread([]() {
-            while (g_running.load() && rclcpp::ok()) {
-                try {
-                    g_executor->spin_some(std::chrono::milliseconds(50));
-                } catch (const std::exception& e) {
-                    std::cerr << "[ROS2] spin_some error: " << e.what() << std::endl;
-                }
-            }
-        });
-
-        std::cout << "[ROS2] 节点 '" << node_name << "' 已初始化" << std::endl;
+        std::cerr << "[ROS2] spin thread exited" << std::endl;
     });
+
+    g_initialized = true;
+    std::cout << "[ROS2] 节点 '" << node_name << "' 已初始化" << std::endl;
 }
 
 void shutdown() {
-    if (!g_running.exchange(false)) {
-        return;  // 已经关闭
-    }
+    std::lock_guard<std::mutex> lock(g_init_mutex);
+    if (!g_initialized) return;
 
-    // 停止 executor
+    g_running.store(false);
+
     if (g_executor) {
         g_executor->cancel();
     }
 
-    // 等待 spin 线程退出
     if (g_spin_thread.joinable()) {
         g_spin_thread.join();
     }
 
-    // 清除节点和 executor
     g_node.reset();
     g_executor.reset();
+    g_initialized = false;
 
-    // 关闭 rclcpp（如果有其他节点可能还在使用，需谨慎）
     if (rclcpp::ok()) {
         rclcpp::shutdown();
     }

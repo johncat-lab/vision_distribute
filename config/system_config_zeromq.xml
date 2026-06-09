@@ -8,7 +8,7 @@
 
 <!-- ZMQ pub/sub 基础端口，topic 端口 = base_port + hash(topic) % 10 -->
 <!-- service 端口 = base_port + 10 + hash(endpoint) % 100 -->
-<base_port>5550</base_port>
+<base_port>15550</base_port>
 
 <!-- 帧发布/订阅 topic (camera_node -> detector_node) -->
 <topic_frame>vision/frame</topic_frame>

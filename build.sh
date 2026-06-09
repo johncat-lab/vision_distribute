@@ -138,7 +138,11 @@ fi
 # 检查上次配置的参数是否变化
 if [[ -f CMakeCache.txt ]]; then
     LAST_TYPE=$(grep 'CMAKE_BUILD_TYPE:STRING=' CMakeCache.txt 2>/dev/null | cut -d= -f2)
+    LAST_GUI=$(grep 'BUILD_GUI:BOOL=' CMakeCache.txt 2>/dev/null | cut -d= -f2)
     if [[ "$LAST_TYPE" != "$BUILD_TYPE" ]]; then
+        NEED_CONFIGURE="true"
+    fi
+    if [[ "$LAST_GUI" != "$BUILD_GUI" ]]; then
         NEED_CONFIGURE="true"
     fi
 fi
@@ -202,14 +206,23 @@ elif [[ "$TARGET" == "camera" ]]; then
     fi
     build_target "vision_rpc"
     build_target "camera_node"
+    echo ">>> 安装..."
+    cmake --install . --config "${BUILD_TYPE}" || die "安装失败"
+    echo ""
 
 elif [[ "$TARGET" == "detector" ]]; then
     build_target "vision_rpc"
     build_target "detector_node"
+    echo ">>> 安装..."
+    cmake --install . --config "${BUILD_TYPE}" || die "安装失败"
+    echo ""
 
 elif [[ "$TARGET" == "comm" ]]; then
     build_target "vision_rpc"
     build_target "comm_node"
+    echo ">>> 安装..."
+    cmake --install . --config "${BUILD_TYPE}" || die "安装失败"
+    echo ""
 
 elif [[ "$TARGET" == "manager" ]]; then
     if [[ "$BUILD_GUI" != "ON" ]]; then
@@ -220,6 +233,9 @@ elif [[ "$TARGET" == "manager" ]]; then
     fi
     build_target "vision_rpc"
     build_target "manager"
+    echo ">>> 安装..."
+    cmake --install . --config "${BUILD_TYPE}" || die "安装失败"
+    echo ""
 fi
 
 # ========== 结果 ==========
@@ -235,15 +251,20 @@ if [[ -z "$TARGET" ]] || [[ "$TARGET" == "all" ]]; then
     fi
 else
     case "$TARGET" in
-        camera)   BIN_DIR="${BUILD_DIR}/camera_node" ;;
-        detector) BIN_DIR="${BUILD_DIR}/detector_node" ;;
-        comm)     BIN_DIR="${BUILD_DIR}/comm_node" ;;
-        manager)  BIN_DIR="${BUILD_DIR}/manager" ;;
-        *)        BIN_DIR="" ;;
+        camera)   BIN_NAME="camera_node" ;;
+        detector) BIN_NAME="detector_node" ;;
+        comm)     BIN_NAME="comm_node" ;;
+        manager)  BIN_NAME="manager" ;;
+        *)        BIN_NAME="" ;;
     esac
-    if [[ -n "$BIN_DIR" ]] && [[ -f "${BIN_DIR}/${TARGET}_node" ]]; then
-        echo "可执行文件: ${BIN_DIR}/${TARGET}_node"
-        ls -la "${BIN_DIR}/${TARGET}_node"
+    if [[ -n "$BIN_NAME" ]]; then
+        if [[ -f "${INSTALL_DIR}/bin/${BIN_NAME}" ]]; then
+            echo "安装路径: ${INSTALL_DIR}/bin/${BIN_NAME}"
+            ls -la "${INSTALL_DIR}/bin/${BIN_NAME}"
+        else
+            echo "可执行文件: ${BUILD_DIR}/${TARGET}/${BIN_NAME}"
+            ls -la "${BUILD_DIR}/${TARGET}/${BIN_NAME}" 2>/dev/null
+        fi
     fi
 fi
 

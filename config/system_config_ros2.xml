@@ -8,7 +8,7 @@
 <domain_id>0</domain_id>
 
 <!-- ROS2 不使用 base_port，保留为默认值即可 -->
-<base_port>5550</base_port>
+<base_port>15550</base_port>
 
 <!-- 帧发布/订阅 topic (camera_node -> detector_node) -->
 <!-- ROS2 topic 命名遵循 ROS2 规范: 小写字母+下划线 -->

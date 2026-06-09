@@ -28,8 +28,14 @@ endif()
 
 if(rclcpp_FOUND)
     find_package(std_msgs REQUIRED)
-    target_link_libraries(vision_rpc PUBLIC rclcpp::rclcpp std_msgs::std_msgs__rosidl_typesupport_cpp)
-    target_include_directories(vision_rpc PUBLIC ${std_msgs_INCLUDE_DIRS})
+    find_package(rcl_interfaces REQUIRED)
+    target_link_libraries(vision_rpc PUBLIC
+        rclcpp::rclcpp
+        std_msgs::std_msgs__rosidl_typesupport_cpp
+        rcl_interfaces::rcl_interfaces__rosidl_typesupport_cpp)
+    target_include_directories(vision_rpc PUBLIC
+        ${std_msgs_INCLUDE_DIRS}
+        ${rcl_interfaces_INCLUDE_DIRS})
     target_compile_definitions(vision_rpc PUBLIC HAS_ROS2)
 endif()
 

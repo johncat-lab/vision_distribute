@@ -271,7 +271,7 @@ int main(int argc, char* argv[]) {
 
     // 7. 注册服务端点
     // comm/set_config - 动态修改配置
-    service->serve("comm/set_config", [&](const ServiceRequest& req) -> ServiceResponse {
+    service->serve("set_config", [&](const ServiceRequest& req) -> ServiceResponse {
         ServiceResponse resp;
         std::cout << "收到 set_config 请求: " << req.payload << std::endl;
 
@@ -301,7 +301,7 @@ int main(int argc, char* argv[]) {
     });
 
     // comm/get_config - 获取当前配置
-    service->serve("comm/get_config", [&](const ServiceRequest& /*req*/) -> ServiceResponse {
+    service->serve("get_config", [&](const ServiceRequest& /*req*/) -> ServiceResponse {
         ServiceResponse resp;
         resp.success = true;
         resp.data = configToString(g_config);
@@ -309,7 +309,7 @@ int main(int argc, char* argv[]) {
     });
 
     // comm/get_status - 获取连接状态
-    service->serve("comm/get_status", [&](const ServiceRequest& /*req*/) -> ServiceResponse {
+    service->serve("get_status", [&](const ServiceRequest& /*req*/) -> ServiceResponse {
         ServiceResponse resp;
         resp.success = true;
         resp.data = getConnectionStatus();

@@ -20,6 +20,7 @@
 #include <memory>
 #include <csignal>
 #include <sstream>
+#include <filesystem>
 #include <opencv2/core.hpp>
 
 // ========== 全局状态 ==========
@@ -28,6 +29,7 @@ static DetectionMsg g_latest_detection;
 static std::mutex g_detection_mutex;
 static std::string g_detector_config_summary;
 static std::atomic<bool> g_running{true};
+static std::atomic<bool> g_detector_ready{false};
 
 // 全局发布者 (需要在回调中使用)
 static std::shared_ptr<IPublisher<DetectionMsg>> g_detection_pub;
@@ -59,6 +61,9 @@ struct DetectorConfig {
     bool verify_with_template = true;
 };
 
+// 保存当前配置，供 reload_template 使用
+static DetectorConfig g_det_cfg;
+
 // ========== 加载检测器配置 ==========
 static DetectorConfig loadDetectorConfig(const std::string& config_path) {
     DetectorConfig cfg;
@@ -71,6 +76,11 @@ static DetectorConfig loadDetectorConfig(const std::string& config_path) {
 
     if (!fs["detector"].empty())         cfg.detector = (std::string)fs["detector"];
     if (!fs["template_dir"].empty())     cfg.template_dir = (std::string)fs["template_dir"];
+    // 相对路径以配置文件所在目录为基准
+    if (!cfg.template_dir.empty() && cfg.template_dir[0] != '/') {
+        std::filesystem::path config_dir = std::filesystem::path(config_path).parent_path();
+        cfg.template_dir = (config_dir / cfg.template_dir).string();
+    }
     if (!fs["match_threshold"].empty())  cfg.match_threshold = (float)fs["match_threshold"];
     if (!fs["segment_mode"].empty())     cfg.segment_mode = (std::string)fs["segment_mode"];
     if (!fs["v_threshold"].empty())      cfg.v_threshold = (int)fs["v_threshold"];
@@ -235,20 +245,20 @@ int main(int argc, char* argv[]) {
     std::cout << "[信息] 分割模式: " << det_cfg.segment_mode << std::endl;
 
     g_detector_config_summary = makeConfigSummary(det_cfg);
+    g_det_cfg = det_cfg;
 
-    // 创建检测器实例
+    // 创建检测器实例（失败时不退出，以未就绪状态运行，等待 reload_template）
     g_detector = createDetector(det_cfg);
     if (!g_detector) {
-        std::cerr << "[错误] 创建检测器失败" << std::endl;
-        return 1;
+        std::cerr << "[警告] 创建检测器失败，将以未就绪状态运行，等待 reload_template 命令" << std::endl;
+        g_detector_ready = false;
+    } else if (!g_detector->init()) {
+        std::cerr << "[警告] 检测器初始化失败（模版可能未就绪），将以未就绪状态运行，等待 reload_template 命令" << std::endl;
+        g_detector_ready = false;
+    } else {
+        g_detector_ready = true;
+        std::cout << "[信息] 检测器初始化完成" << std::endl;
     }
-
-    if (!g_detector->init()) {
-        std::cerr << "[错误] 检测器初始化失败" << std::endl;
-        return 1;
-    }
-
-    std::cout << "[信息] 检测器初始化完成" << std::endl;
 
     // 注册信号处理
     signal(SIGINT, signalHandler);
@@ -269,7 +279,7 @@ int main(int argc, char* argv[]) {
     auto service = factory.createService<ServiceRequest, ServiceResponse>("detector");
 
     // 注册 get_result 服务处理函数
-    service->serve("detector/get_result", [](const ServiceRequest& req) -> ServiceResponse {
+    service->serve("get_result", [](const ServiceRequest& req) -> ServiceResponse {
         (void)req;
         ServiceResponse resp;
         std::lock_guard<std::mutex> lock(g_detection_mutex);
@@ -279,16 +289,51 @@ int main(int argc, char* argv[]) {
     });
 
     // 注册 get_config 服务处理函数
-    service->serve("detector/get_config", [](const ServiceRequest& req) -> ServiceResponse {
+    service->serve("get_config", [](const ServiceRequest& req) -> ServiceResponse {
         (void)req;
         ServiceResponse resp;
+        resp.success = g_detector_ready.load();
+        resp.data = g_detector_config_summary
+                  + ",ready=" + (g_detector_ready.load() ? "1" : "0");
+        return resp;
+    });
+
+    // 注册 reload_template 服务处理函数：重新加载模版，不重启节点
+    service->serve("reload_template", [](const ServiceRequest& req) -> ServiceResponse {
+        (void)req;
+        ServiceResponse resp;
+        std::cout << "[信息] 收到 reload_template 请求，重新初始化检测器..." << std::endl;
+        auto new_det = createDetector(g_det_cfg);
+        if (!new_det) {
+            resp.success = false;
+            resp.data = "创建检测器失败";
+            std::cerr << "[错误] reload_template: 创建检测器失败" << std::endl;
+            return resp;
+        }
+        if (!new_det->init()) {
+            resp.success = false;
+            resp.data = "检测器初始化失败（模版文件可能缺失）";
+            std::cerr << "[错误] reload_template: 检测器初始化失败" << std::endl;
+            return resp;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_detection_mutex);
+            g_detector = std::move(new_det);
+        }
+        g_detector_ready = true;
+        std::cout << "[信息] reload_template: 检测器重新初始化完成" << std::endl;
         resp.success = true;
-        resp.data = g_detector_config_summary;
+        resp.data = "reload_ok";
         return resp;
     });
 
     // 订阅帧回调: 反序列化 FrameMsg -> 转换为 Frame -> 检测 -> 发布 DetectionMsg
     frame_sub->subscribe([](const FrameMsg& frame_msg) {
+        // 检测器未就绪时跳过
+        if (!g_detector_ready.load() || !g_detector) {
+            return;
+        }
+
         // 转换为 Frame 结构
         Frame frame = frameMsgToFrame(frame_msg);
 

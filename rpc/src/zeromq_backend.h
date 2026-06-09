@@ -9,6 +9,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include <map>
+#include <mutex>
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -43,6 +45,7 @@ public:
         : socket_(context, zmq::socket_type::pub), topic_(topic) {
         uint16_t port = computeTopicPort(topic, base_port);
         std::string addr = "tcp://*:" + std::to_string(port);
+        socket_.set(zmq::sockopt::linger, 0);
         try {
             socket_.bind(addr);
         } catch (const zmq::error_t& e) {
@@ -167,36 +170,52 @@ public:
     }
 
     bool serve(const std::string& endpoint, typename IService<Request, Response>::Handler handler) override {
-        // Stop any existing server
-        stop();
+        std::lock_guard<std::mutex> lock(handlers_mutex_);
+        handlers_[endpoint] = handler;
 
-        handler_ = handler;
+        // 如果服务器还没启动，在 base_port + 10 上启动单个 REP socket
+        if (!running_.load()) {
+            rep_socket_ = std::make_unique<zmq::socket_t>(context_, zmq::socket_type::rep);
+            rep_socket_->set(zmq::sockopt::linger, 0);
+            // 使用固定端口作为服务端口（所有 endpoint 共享）
+            uint16_t port = base_port_ + 10;
+            std::string addr = "tcp://*:" + std::to_string(port);
 
-        // Create REP socket
-        rep_socket_ = std::make_unique<zmq::socket_t>(context_, zmq::socket_type::rep);
-        uint16_t port = computeServicePort(endpoint, base_port_);
-        std::string addr = "tcp://*:" + std::to_string(port);
-        try {
-            rep_socket_->bind(addr);
-        } catch (const zmq::error_t& e) {
-            std::cerr << "ZmqService bind failed on " << addr << ": " << e.what() << std::endl;
-            rep_socket_.reset();
-            return false;
+            std::cerr << "[ZmqService::serve] " << name_ << " binding REP on " << addr
+                      << " (endpoint=" << endpoint << ")" << std::endl;
+
+            try {
+                rep_socket_->bind(addr);
+            } catch (const zmq::error_t& e) {
+                std::cerr << "ZmqService bind failed on " << addr << ": " << e.what() << std::endl;
+                rep_socket_.reset();
+                return false;
+            }
+
+            running_.store(true);
+            thread_ = std::thread(&ZmqService::serveLoop, this);
+        } else {
+            std::cerr << "[ZmqService::serve] " << name_
+                      << " handler registered: " << endpoint << std::endl;
         }
-
-        running_.store(true);
-        thread_ = std::thread(&ZmqService::serveLoop, this);
         return true;
     }
 
     Response call(const std::string& endpoint, const Request& req) override {
         zmq::socket_t socket(context_, zmq::socket_type::req);
-        uint16_t port = computeServicePort(endpoint, base_port_);
+        socket.set(zmq::sockopt::linger, 0);
+        // 连接到服务端的固定端口
+        uint16_t port = base_port_ + 10;
         std::string addr = "tcp://localhost:" + std::to_string(port);
+
+        std::cerr << "[ZmqService::call] " << name_ << "/" << endpoint
+                  << " base_port=" << base_port_ << " port=" << port
+                  << " addr=" << addr << std::endl;
 
         try {
             socket.connect(addr);
         } catch (const zmq::error_t& e) {
+            std::cerr << "[ZmqService::call] CONNECT FAILED: " << e.what() << std::endl;
             throw std::runtime_error("ZmqService call connect failed to " + addr + ": " + e.what());
         }
 
@@ -221,10 +240,12 @@ public:
         try {
             zmq::poll(items, 1, std::chrono::milliseconds(5000));
         } catch (const zmq::error_t& e) {
+            std::cerr << "[ZmqService::call] POLL ERROR: " << e.what() << std::endl;
             throw std::runtime_error("ZmqService call poll error: " + std::string(e.what()));
         }
 
         if (!(items[0].revents & ZMQ_POLLIN)) {
+            std::cerr << "[ZmqService::call] TIMEOUT after 5s for endpoint=" << endpoint << std::endl;
             throw std::runtime_error("ZmqService call timeout: " + endpoint);
         }
 
@@ -252,6 +273,7 @@ public:
             thread_.join();
         }
         rep_socket_.reset();
+        handlers_.clear();
     }
 
 private:
@@ -275,7 +297,27 @@ private:
                     );
                     Request req = Request::deserialize(req_str);
 
-                    Response resp = handler_(req);
+                    // 根据请求中的 endpoint 字段分发到对应 handler
+                    typename IService<Request, Response>::Handler handler;
+                    {
+                        std::lock_guard<std::mutex> lock(handlers_mutex_);
+                        auto it = handlers_.find(req.endpoint);
+                        if (it != handlers_.end()) {
+                            handler = it->second;
+                        } else {
+                            std::cerr << "[ZmqService::serveLoop] unknown endpoint: "
+                                      << req.endpoint << std::endl;
+                            Response resp;
+                            resp.success = false;
+                            resp.data = "unknown endpoint: " + req.endpoint;
+                            std::string resp_str = resp.serialize();
+                            zmq::message_t response_msg(resp_str.data(), resp_str.size());
+                            rep_socket_->send(response_msg, zmq::send_flags::none);
+                            continue;
+                        }
+                    }
+
+                    Response resp = handler(req);
 
                     std::string resp_str = resp.serialize();
                     zmq::message_t response_msg(resp_str.data(), resp_str.size());
@@ -290,7 +332,8 @@ private:
     zmq::context_t& context_;
     std::string name_;
     uint16_t base_port_;
-    typename IService<Request, Response>::Handler handler_;
+    std::map<std::string, typename IService<Request, Response>::Handler> handlers_;
+    std::mutex handlers_mutex_;
     std::unique_ptr<zmq::socket_t> rep_socket_;
     std::atomic<bool> running_;
     std::thread thread_;

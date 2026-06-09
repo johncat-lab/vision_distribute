@@ -38,7 +38,7 @@ static void signalHandler(int) {
 // ========== 相机配置结构体 ==========
 struct CameraConfig {
     int camera_index = 0;
-    std::string trigger_mode = "off";
+    std::string trigger_mode = "continuous";
     std::string pixel_format = "Mono8";
     std::string exposure_auto = "continuous";
     float exposure_time = 10000.0f;
@@ -74,7 +74,7 @@ static CameraConfig loadCameraConfig(const std::string& path) {
 static void parseTriggerMode(const std::string& mode_str,
                              TriggerMode& mode,
                              TriggerSource& source) {
-    if (mode_str == "off") {
+    if (mode_str == "off" || mode_str == "continuous") {
         mode = TriggerMode::OFF;
         source = TriggerSource::LINE0;
     } else {
@@ -213,10 +213,21 @@ int main(int argc, char* argv[]) {
         camera.setTriggerSource(trig_source);
     }
 
-    camera.setExposureAuto(parseExposureAuto(cam_cfg.exposure_auto));
-    camera.setExposureTime(cam_cfg.exposure_time);
-    camera.setGainAuto(parseGainAuto(cam_cfg.gain_auto));
-    camera.setGain(cam_cfg.gain);
+    auto expAuto = parseExposureAuto(cam_cfg.exposure_auto);
+    camera.setExposureAuto(expAuto);
+    if (expAuto == ExposureAuto::OFF) {
+        camera.setExposureTime(cam_cfg.exposure_time);
+    } else {
+        std::cout << "[CameraNode] 自动曝光模式开启，跳过手动曝光时间设置" << std::endl;
+    }
+
+    auto gainAuto = parseGainAuto(cam_cfg.gain_auto);
+    camera.setGainAuto(gainAuto);
+    if (gainAuto == GainAuto::OFF) {
+        camera.setGain(cam_cfg.gain);
+    } else {
+        std::cout << "[CameraNode] 自动增益模式开启，跳过手动增益设置" << std::endl;
+    }
     camera.setFrameRate(cam_cfg.frame_rate);
 
     std::cout << "[CameraNode] 相机参数已配置" << std::endl;
@@ -245,8 +256,8 @@ int main(int argc, char* argv[]) {
     });
 
     // ---- 9. 注册服务端点 ----
-    // camera/set_exposure
-    camera_service->serve("camera/set_exposure",
+    // set_exposure
+    camera_service->serve("set_exposure",
         [&camera, cam_mutex, &cam_cfg](const ServiceRequest& req) -> ServiceResponse {
             std::lock_guard<std::mutex> lock(*cam_mutex);
             ServiceResponse resp;
@@ -267,8 +278,8 @@ int main(int argc, char* argv[]) {
             return resp;
         });
 
-    // camera/set_gain
-    camera_service->serve("camera/set_gain",
+    // set_gain
+    camera_service->serve("set_gain",
         [&camera, cam_mutex, &cam_cfg](const ServiceRequest& req) -> ServiceResponse {
             std::lock_guard<std::mutex> lock(*cam_mutex);
             ServiceResponse resp;
@@ -289,8 +300,8 @@ int main(int argc, char* argv[]) {
             return resp;
         });
 
-    // camera/set_trigger_mode
-    camera_service->serve("camera/set_trigger_mode",
+    // set_trigger_mode
+    camera_service->serve("set_trigger_mode",
         [&camera, cam_mutex, &cam_cfg](const ServiceRequest& req) -> ServiceResponse {
             std::lock_guard<std::mutex> lock(*cam_mutex);
             ServiceResponse resp;
@@ -312,8 +323,8 @@ int main(int argc, char* argv[]) {
             return resp;
         });
 
-    // camera/soft_trigger
-    camera_service->serve("camera/soft_trigger",
+    // soft_trigger
+    camera_service->serve("soft_trigger",
         [&camera](const ServiceRequest&) -> ServiceResponse {
             ServiceResponse resp;
             if (camera.triggerSoftware()) {
@@ -326,8 +337,8 @@ int main(int argc, char* argv[]) {
             return resp;
         });
 
-    // camera/get_config
-    camera_service->serve("camera/get_config",
+    // get_config
+    camera_service->serve("get_config",
         [&cam_cfg](const ServiceRequest&) -> ServiceResponse {
             ServiceResponse resp;
             resp.success = true;

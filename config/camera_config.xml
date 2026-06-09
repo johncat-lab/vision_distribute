@@ -1,8 +1,9 @@
 <?xml version="1.0"?>
 <opencv_storage>
 <camera_index>0</camera_index>
-<trigger_mode>line0</trigger_mode>
-<trigger_source>line1</trigger_source>
+<!-- 触发模式: continuous(连续采集) | off(同continuous) | line0 | line1 | line2 | software -->
+<trigger_mode>continuous</trigger_mode>
+<trigger_source>software</trigger_source>
 <pixel_format>Mono8</pixel_format>
 <exposure_auto>continuous</exposure_auto>
 <exposure_time>10000</exposure_time>

@@ -1,0 +1,5 @@
+[Ros2Service::call] name=camera endpoint=get_config corr_id=[Ros2Service::call] name=detector endpoint=get_config corr_id=28 req.payload= svc_req.payload.size=18 endpoint_in_req='get_config29 req.payload= svc_req.payload.size=[Ros2Service::call] name=comm endpoint=get_status corr_id=30 req.payload= svc_req.payload.size=18 endpoint_in_req='get_status'
+18 endpoint_in_req='get_config'
+'
+[callService] camera/get_config FAILED: ROS2 service call timeout: camera/get_config[callService] comm/get_status FAILED: ROS2 service call timeout: comm/get_status
+[callService] detector/get_config FAILED: ROS2 service call timeout: detector/get_config
