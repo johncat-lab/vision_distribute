@@ -99,9 +99,12 @@ void MainWindow::setupUI()
     status_camera_   = new QLabel("Camera: --", this);
     status_detector_ = new QLabel("Detector: --", this);
     status_comm_     = new QLabel("Comm: --", this);
+    status_fps_      = new QLabel("FPS: --", this);
+    status_fps_->setStyleSheet("color: blue; font-weight: bold;");
     status_layout->addWidget(status_camera_);
     status_layout->addWidget(status_detector_);
     status_layout->addWidget(status_comm_);
+    status_layout->addWidget(status_fps_);
     main_layout->addLayout(status_layout);
 
     // ---- 选项卡 ----
@@ -552,6 +555,19 @@ void MainWindow::setupRPC(const std::string& config_path)
         current_frame_num_ = msg.frame_num;
         frame_updated_ = true;
         LOG_DEBUG("[Manager] 收到帧#%d, 尺寸=%dx%d, 像素类型=%d", msg.frame_num, msg.width, msg.height, msg.pixel_type);
+        
+        // 统计帧率
+        frame_count_++;
+        uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (last_fps_time_ == 0) {
+            last_fps_time_ = now;
+        } else if (now - last_fps_time_ >= 1000) {  // 每秒计算一次
+            double elapsed = (now - last_fps_time_) / 1000.0;
+            current_fps_ = static_cast<float>(frame_count_ / elapsed);
+            frame_count_ = 0;
+            last_fps_time_ = now;
+        }
     });
 
     detection_sub_->subscribe([this](const DetectionMsg& msg) {
@@ -707,6 +723,14 @@ void MainWindow::onUpdateDisplay()
             frame_updated_ = false;
             need_frame = true;
         }
+    }
+
+    // 更新帧率显示
+    float fps = current_fps_;
+    if (fps > 0) {
+        status_fps_->setText(QString("FPS: %1").arg(fps, 0, 'f', 1));
+    } else {
+        status_fps_->setText("FPS: --");
     }
 
     if (need_frame) {

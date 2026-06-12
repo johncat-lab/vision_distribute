@@ -121,10 +121,16 @@ private:
     QLabel* status_camera_;
     QLabel* status_detector_;
     QLabel* status_comm_;
+    QLabel* status_fps_;  // 帧率显示
 
     // Timers
     QTimer* display_timer_;
     QTimer* status_timer_;
+
+    // Frame rate statistics
+    std::atomic<uint64_t> frame_count_{0};
+    std::atomic<uint64_t> last_fps_time_{0};
+    std::atomic<float> current_fps_{0.0f};
 
     // Async call guards (防止并发的服务调用堆积)
     std::atomic<bool> camera_call_pending_{false};
