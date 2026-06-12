@@ -35,6 +35,8 @@ public:
     // ===== 调试信息 =====
     int getLastCandidateCount() const { return last_candidate_count_; }
     double getLastBestScore() const { return last_best_score_; }
+    int getTemplateWidth() const { return template_img_.cols; }
+    int getTemplateHeight() const { return template_img_.rows; }
 
 private:
     // ===== 内部结构 =====

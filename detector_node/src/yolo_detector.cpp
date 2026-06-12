@@ -1,5 +1,5 @@
 #include "yolo_detector.h"
-#include <iostream>
+#include "logger/logger.h"
 #include <fstream>
 #include <algorithm>
 #include <cstring>
@@ -81,18 +81,17 @@ bool YoloDetector::init() {
         }
 
         ready_.store(true);
-        std::cout << "[YOLO] 模型加载成功: " << model_path_ << std::endl;
-        std::cout << "[YOLO] 输入: " << session_->input_names_str[0]
-                  << ", 输出: " << session_->output_names_str[0] << std::endl;
+        LOG_INFO("[YOLO] 模型加载成功: %s", model_path_.c_str());
+        LOG_INFO("[YOLO] 输入: %s, 输出: %s", session_->input_names_str[0].c_str(), session_->output_names_str[0].c_str());
         return true;
 
     } catch (const Ort::Exception& e) {
-        std::cerr << "[YOLO] ONNX Runtime 错误: " << e.what() << std::endl;
+        LOG_ERROR("[YOLO] ONNX Runtime 错误: %s", e.what());
         delete session_;
         session_ = nullptr;
         return false;
     } catch (const std::exception& e) {
-        std::cerr << "[YOLO] 初始化错误: " << e.what() << std::endl;
+        LOG_ERROR("[YOLO] 初始化错误: %s", e.what());
         delete session_;
         session_ = nullptr;
         return false;
@@ -148,7 +147,7 @@ ObjectInfoList YoloDetector::detect(const Frame& frame) {
         }
 
     } catch (const Ort::Exception& e) {
-        std::cerr << "[YOLO] 推理错误: " << e.what() << std::endl;
+        LOG_ERROR("[YOLO] 推理错误: %s", e.what());
     }
 
     return result;
@@ -195,8 +194,7 @@ std::vector<float> YoloDetector::preprocess(const Frame& frame,
                 rgb_data[i * 3 + 2] = frame.data[i];
             }
         } else {
-            std::cerr << "[YOLO] 不支持的像素格式: 0x" << std::hex
-                      << frame.pixelType << std::dec << std::endl;
+            LOG_ERROR("[YOLO] 不支持的像素格式: 0x%X", frame.pixelType);
             return {};
         }
     }
@@ -252,7 +250,7 @@ ObjectInfoList YoloDetector::postprocess(const float* output_data,
     ObjectInfoList result;
 
     if (output_shape.size() < 3) {
-        std::cerr << "[YOLO] 输出维度异常: " << output_shape.size() << std::endl;
+        LOG_ERROR("[YOLO] 输出维度异常: %d", output_shape.size());
         return result;
     }
 
@@ -280,10 +278,9 @@ ObjectInfoList YoloDetector::postprocess(const float* output_data,
         transposed = true;
     }
 
-    // OBB: 前5个通道 = x, y, w, h, angle; 后面是类别置信度
     int num_classes = num_channels - 5;
     if (num_classes <= 0) {
-        std::cerr << "[YOLO] 输出通道数异常: " << num_channels << std::endl;
+        LOG_ERROR("[YOLO] 输出通道数异常: %d", num_channels);
         return result;
     }
 
@@ -636,7 +633,7 @@ static bool saveBMP(const std::string& path, const unsigned char* rgb,
 
     std::ofstream ofs(path, std::ios::binary);
     if (!ofs.is_open()) {
-        std::cerr << "[YOLO] 无法打开保存文件: " << path << std::endl;
+        LOG_ERROR("[YOLO] 无法打开保存文件: %s", path.c_str());
         return false;
     }
 
@@ -726,7 +723,7 @@ static std::string formatFloat(double v, int precision = 1) {
 bool YoloDetector::saveAnnotated(const Frame& frame, const std::string& path) {
     std::vector<unsigned char> rgb;
     if (!frameToRgb(frame, rgb)) {
-        std::cerr << "[YOLO] saveAnnotated: 不支持的帧格式" << std::endl;
+        LOG_ERROR("[YOLO] saveAnnotated: 不支持的帧格式");
         return false;
     }
 
@@ -774,7 +771,6 @@ bool YoloDetector::saveAnnotated(const Frame& frame, const std::string& path) {
     if (!saveBMP(path, rgb.data(), W, H)) {
         return false;
     }
-    std::cout << "[YOLO] 已保存标注图: " << path
-              << " (目标数: " << last_detections_.size() << ")" << std::endl;
+    LOG_INFO("[YOLO] 已保存标注图: %s (目标数: %d)", path.c_str(), last_detections_.size());
     return true;
 }

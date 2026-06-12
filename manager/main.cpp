@@ -1,11 +1,11 @@
 #include "main_window.h"
+#include "logger/logger.h"
 
 #include <QApplication>
-#include <iostream>
 #include <string>
 
 static void printUsage(const char* prog) {
-    std::cout << "用法: " << prog << " --config <system_config.xml>" << std::endl;
+    LOG_INFO("用法: %s --config <system_config.xml>", prog);
 }
 
 int main(int argc, char* argv[])
@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
     }
 
     if (config_path.empty()) {
-        std::cerr << "错误: 未指定系统配置文件" << std::endl;
+        LOG_ERROR("错误: 未指定系统配置文件");
         printUsage(argv[0]);
         return 1;
     }

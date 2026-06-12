@@ -4,6 +4,10 @@ project(vision_distribute LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 设置安装后的 RPATH，让可执行文件自动找到 ../lib/ 下的共享库
+set(CMAKE_INSTALL_RPATH "\$ORIGIN/../lib")
+set(CMAKE_BUILD_RPATH "\$ORIGIN/../lib")
+
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "x86_64")
 endif()
@@ -188,6 +192,13 @@ endif()
 option(BUILD_GUI "Build Qt6 GUI manager application" OFF)
 
 # ========== 添加子目录 ==========
+add_subdirectory(logger)
+
+# vision_interfaces 必须在 rpc 之前处理，因为 rpc 需要链接其生成的 target
+if(rclcpp_FOUND)
+    add_subdirectory(vision_interfaces)
+endif()
+
 add_subdirectory(rpc)
 
 if(USE_HIK)
@@ -209,6 +220,12 @@ add_subdirectory(tests)
 # ========== 安装配置文件 ==========
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/config/
     DESTINATION config
+)
+
+# ========== 安装模版文件 ==========
+# detector.xml 中 template_dir=./template，对应 install/config/template
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/template/
+    DESTINATION config/template
 )
 
 # ========== Release 优化 ==========

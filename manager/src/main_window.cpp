@@ -1,5 +1,26 @@
 #include "main_window.h"
 #include "rpc/config_loader.h"
+#include "logger/logger.h"
+
+#ifdef HAS_ROS2
+#include "ros2_backend.h"
+#include "vision_interfaces/srv/camera_set_exposure.hpp"
+#include "vision_interfaces/srv/camera_set_gain.hpp"
+#include "vision_interfaces/srv/camera_set_trigger_mode.hpp"
+#include "vision_interfaces/srv/camera_soft_trigger.hpp"
+#include "vision_interfaces/srv/camera_get_config.hpp"
+#include "vision_interfaces/srv/detector_get_result.hpp"
+#include "vision_interfaces/srv/detector_get_config.hpp"
+#include "vision_interfaces/srv/detector_on_off.hpp"
+#include "vision_interfaces/srv/detector_set_threshold.hpp"
+#include "vision_interfaces/srv/detector_set_v_threshold.hpp"
+#include "vision_interfaces/srv/detector_set_grad_threshold.hpp"
+#include "vision_interfaces/srv/detector_set_segment_mode.hpp"
+#include "vision_interfaces/srv/detector_reload_template.hpp"
+#include "vision_interfaces/srv/comm_set_config.hpp"
+#include "vision_interfaces/srv/comm_get_config.hpp"
+#include "vision_interfaces/srv/comm_get_status.hpp"
+#endif
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -111,15 +132,23 @@ void MainWindow::setupUI()
         form->addRow("Gain:", makeRowWithApply(spin_gain_, btn_apply_gain));
 
         // Trigger Mode: [ComboBox] [Apply]
+        // "continuous" = 连续采集（TriggerMode::OFF），其余为触发模式
         combo_trigger_mode_ = new QComboBox(this);
-        combo_trigger_mode_->addItems({"off", "line0", "line1", "line2", "software"});
+        combo_trigger_mode_->addItems({"continuous", "software", "line0", "line1", "line2"});
         auto* btn_apply_trigger = new QPushButton("Apply", this);
         btn_apply_trigger->setFixedWidth(60);
         form->addRow("Trigger Mode:", makeRowWithApply(combo_trigger_mode_, btn_apply_trigger));
 
-        // Soft Trigger (独立按钮)
+        // Soft Trigger (独立按钮，仅 software 模式可用)
         btn_soft_trigger_ = new QPushButton("Soft Trigger", this);
+        btn_soft_trigger_->setEnabled(false);  // 初始禁用，等 get_config 后按实际模式启用
         form->addRow("", btn_soft_trigger_);
+
+        // 联动：切换触发模式时更新 Soft Trigger 按钮可用状态
+        connect(combo_trigger_mode_, &QComboBox::currentTextChanged,
+                this, [this](const QString& text) {
+                    btn_soft_trigger_->setEnabled(text == "software");
+                });
 
         // Camera Info (只读文本)
         text_camera_info_ = new QTextEdit(this);
@@ -186,12 +215,18 @@ void MainWindow::setupUI()
         btn_reload_template_ = new QPushButton("Reload Template", this);
         form->addRow("", btn_reload_template_);
 
+        // Detector On/Off Switch (独立按钮)
+        btn_detector_onoff_ = new QPushButton("Enable Detector", this);
+        btn_detector_onoff_->setStyleSheet("QPushButton { background-color: red; color: white; }");
+        form->addRow("", btn_detector_onoff_);
+
         connect(btn_apply_threshold,   &QPushButton::clicked, this, &MainWindow::onDetectorSetThreshold);
         connect(btn_apply_seg,         &QPushButton::clicked, this, &MainWindow::onDetectorSetSegmentMode);
         connect(btn_apply_vth,         &QPushButton::clicked, this, &MainWindow::onDetectorSetVThreshold);
         connect(btn_apply_gth,         &QPushButton::clicked, this, &MainWindow::onDetectorSetGradThreshold);
         connect(btn_refresh_det,       &QPushButton::clicked, this, &MainWindow::onDetectorGetConfig);
         connect(btn_reload_template_,  &QPushButton::clicked, this, &MainWindow::onDetectorReloadTemplate);
+        connect(btn_detector_onoff_,   &QPushButton::clicked, this, &MainWindow::onDetectorOnOff);
 
         tabs->addTab(w, "Detector");
     }
@@ -204,6 +239,7 @@ void MainWindow::setupUI()
 
         // Host: [LineEdit] [Apply]
         edit_comm_host_ = new QLineEdit(this);
+        edit_comm_host_->setText("0.0.0.0");
         auto* btn_apply_host = new QPushButton("Apply", this);
         btn_apply_host->setFixedWidth(60);
         form->addRow("Host:", makeRowWithApply(edit_comm_host_, btn_apply_host));
@@ -211,6 +247,7 @@ void MainWindow::setupUI()
         // Port: [SpinBox] [Apply]
         spin_comm_port_ = new QSpinBox(this);
         spin_comm_port_->setRange(1, 65535);
+        spin_comm_port_->setValue(7930);
         auto* btn_apply_port = new QPushButton("Apply", this);
         btn_apply_port->setFixedWidth(60);
         form->addRow("Port:", makeRowWithApply(spin_comm_port_, btn_apply_port));
@@ -249,14 +286,263 @@ void MainWindow::setupUI()
 void MainWindow::setupRPC(const std::string& config_path)
 {
     NodeConfig config = ConfigLoader::loadSystemConfig(config_path);
+    config.node_name = "manager_node";
     factory_ = std::make_unique<NodeFactory>(config);
 
     frame_sub_     = factory_->createSubscriber<FrameMsg>("vision/frame");
     detection_sub_ = factory_->createSubscriber<DetectionMsg>("vision/detection");
+    annotation_sub_ = factory_->createSubscriber<AnnotationMsg>("vision/annotation");
 
     camera_service_   = factory_->createService<ServiceRequest, ServiceResponse>("camera");
     detector_service_ = factory_->createService<ServiceRequest, ServiceResponse>("detector");
     comm_service_     = factory_->createService<ServiceRequest, ServiceResponse>("comm");
+
+#ifdef HAS_ROS2
+    // 注册原生 ROS2 service 类型映射（客户端侧转换，使 call() 通过原生 client 调用）
+    // toNativeReq: ServiceRequest → 原生请求 (客户端发送时使用)
+    // fromNativeResp: 原生响应 → ServiceResponse (客户端接收时使用)
+    // toSrvReq 和 fromSrvResp 在 manager 中不需要（manager 不是服务端），传空 lambda
+
+    if (auto* rs = dynamic_cast<Ros2Service<ServiceRequest, ServiceResponse>*>(camera_service_.get())) {
+        rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetExposure>(
+            "set_exposure",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetExposure::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::CameraSetExposure::Request>();
+                req->exposure_time = std::stof(sr.payload);
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetGain>(
+            "set_gain",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetGain::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::CameraSetGain::Request>();
+                req->gain = std::stof(sr.payload);
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetTriggerMode>(
+            "set_trigger_mode",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetTriggerMode::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::CameraSetTriggerMode::Request>();
+                req->mode = sr.payload;
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CameraSoftTrigger>(
+            "soft_trigger",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraSoftTrigger::Request> {
+                return std::make_shared<vision_interfaces::srv::CameraSoftTrigger::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CameraGetConfig>(
+            "get_config",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraGetConfig::Request> {
+                return std::make_shared<vision_interfaces::srv::CameraGetConfig::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->config_data;
+                return sr;
+            });
+    }
+
+    if (auto* rs = dynamic_cast<Ros2Service<ServiceRequest, ServiceResponse>*>(detector_service_.get())) {
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorGetResult>(
+            "get_result",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetResult::Request> {
+                return std::make_shared<vision_interfaces::srv::DetectorGetResult::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data.assign(resp->detection_data.begin(), resp->detection_data.end());
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorGetConfig>(
+            "get_config",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetConfig::Request> {
+                return std::make_shared<vision_interfaces::srv::DetectorGetConfig::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->ready;
+                sr.data = resp->config_data;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorOnOff>(
+            "onoff",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorOnOff::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::DetectorOnOff::Request>();
+                req->command = sr.payload;
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetThreshold>(
+            "set_threshold",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetThreshold::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::DetectorSetThreshold::Request>();
+                req->threshold = std::stof(sr.payload);
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetVThreshold>(
+            "set_v_threshold",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetVThreshold::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::DetectorSetVThreshold::Request>();
+                req->threshold = std::stoi(sr.payload);
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetGradThreshold>(
+            "set_grad_threshold",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetGradThreshold::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::DetectorSetGradThreshold::Request>();
+                req->threshold = std::stoi(sr.payload);
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetSegmentMode>(
+            "set_segment_mode",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetSegmentMode::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::DetectorSetSegmentMode::Request>();
+                req->mode = sr.payload;
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::DetectorReloadTemplate>(
+            "reload_template",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorReloadTemplate::Request> {
+                return std::make_shared<vision_interfaces::srv::DetectorReloadTemplate::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+    }
+
+    if (auto* rs = dynamic_cast<Ros2Service<ServiceRequest, ServiceResponse>*>(comm_service_.get())) {
+        rs->registerNativeEndpoint<vision_interfaces::srv::CommSetConfig>(
+            "set_config",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CommSetConfig::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::CommSetConfig::Request>();
+                req->config_data = sr.payload;
+                return req;
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CommGetConfig>(
+            "get_config",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetConfig::Request> {
+                return std::make_shared<vision_interfaces::srv::CommGetConfig::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->config_data;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CommGetStatus>(
+            "get_status",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse&, auto) {},
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetStatus::Request> {
+                return std::make_shared<vision_interfaces::srv::CommGetStatus::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->status_data;
+                return sr;
+            });
+    }
+#endif
+
+    // 预连接：提前创建所有已注册 endpoint 的原生 client，避免首次调用延迟
+    camera_service_->preconnect();
+    detector_service_->preconnect();
+    comm_service_->preconnect();
 
     frame_sub_->subscribe([this](const FrameMsg& msg) {
         QMutexLocker locker(&frame_mutex_);
@@ -265,12 +551,20 @@ void MainWindow::setupRPC(const std::string& config_path)
                                  const_cast<uint8_t*>(msg.data.data())).clone();
         current_frame_num_ = msg.frame_num;
         frame_updated_ = true;
+        LOG_DEBUG("[Manager] 收到帧#%d, 尺寸=%dx%d, 像素类型=%d", msg.frame_num, msg.width, msg.height, msg.pixel_type);
     });
 
     detection_sub_->subscribe([this](const DetectionMsg& msg) {
         QMutexLocker locker(&detection_mutex_);
         latest_detection_ = msg;
         detection_updated_ = true;
+    });
+
+    annotation_sub_->subscribe([this](const AnnotationMsg& msg) {
+        QMutexLocker locker(&annotation_mutex_);
+        latest_annotation_ = msg;
+        annotation_updated_ = true;
+        LOG_DEBUG("[Manager] 收到 AnnotationMsg: 帧#%d, 物体数=%d, 模板尺寸=%dx%d", msg.frame_num, msg.objects.size(), msg.template_width, msg.template_height);
     });
 }
 
@@ -345,6 +639,8 @@ void MainWindow::parseAndApplyCameraConfig(const std::string& data)
         try { spin_gain_->setValue(std::stod(gain_str)); } catch (...) {}
     }
     if (!trigger_str.empty()) {
+        // camera 节点 "off" 与 "continuous" 均表示连续模式，统一映射到 combo 的 "continuous"
+        if (trigger_str == "off") trigger_str = "continuous";
         int idx = combo_trigger_mode_->findText(QString::fromStdString(trigger_str));
         if (idx >= 0) combo_trigger_mode_->setCurrentIndex(idx);
     }
@@ -414,18 +710,39 @@ void MainWindow::onUpdateDisplay()
     }
 
     if (need_frame) {
-        bool need_overlay = false;
-        DetectionMsg det;
+        LOG_DEBUG("[Manager] onUpdateDisplay: 帧#%d, 图像尺寸=%dx%d", current_frame_num_, frame.cols, frame.rows);
+        
+        // 优先使用 AnnotationMsg (支持完整绘制信息)
+        bool need_annotation_overlay = false;
+        AnnotationMsg ann;
         {
-            QMutexLocker locker(&detection_mutex_);
-            if (detection_updated_) {
-                det = latest_detection_;
-                detection_updated_ = false;
-                need_overlay = true;
+            QMutexLocker locker(&annotation_mutex_);
+            if (annotation_updated_) {
+                ann = latest_annotation_;
+                annotation_updated_ = false;
+                need_annotation_overlay = true;
+                LOG_DEBUG("[Manager] 使用 AnnotationMsg 绘制: 帧#%d, 物体数=%d", ann.frame_num, ann.objects.size());
             }
         }
-        if (need_overlay) {
-            overlayDetections(frame, det);
+        
+        if (need_annotation_overlay) {
+            overlayAnnotations(frame, ann);
+        } else {
+            // 回退到 DetectionMsg (简单绘制)
+            bool need_detection_overlay = false;
+            DetectionMsg det;
+            {
+                QMutexLocker locker(&detection_mutex_);
+                if (detection_updated_) {
+                    det = latest_detection_;
+                    detection_updated_ = false;
+                    need_detection_overlay = true;
+                    LOG_DEBUG("[Manager] 使用 DetectionMsg 绘制");
+                }
+            }
+            if (need_detection_overlay) {
+                overlayDetections(frame, det);
+            }
         }
         updateImageDisplay(frame);
     }
@@ -563,6 +880,32 @@ void MainWindow::onDetectorReloadTemplate()
         });
 }
 
+void MainWindow::onDetectorOnOff()
+{
+    btn_detector_onoff_->setEnabled(false);
+    
+    std::string cmd = detector_enabled_ ? "off" : "on";
+    callService("detector", "onoff", cmd,
+        [this](const ServiceResponse& resp) {
+            btn_detector_onoff_->setEnabled(true);
+            if (resp.success) {
+                detector_enabled_ = !detector_enabled_;
+                if (detector_enabled_) {
+                    btn_detector_onoff_->setText("Disable Detector");
+                    btn_detector_onoff_->setStyleSheet("QPushButton { background-color: green; color: white; }");
+                    statusBar()->showMessage("Detector enabled", 3000);
+                } else {
+                    btn_detector_onoff_->setText("Enable Detector");
+                    btn_detector_onoff_->setStyleSheet("QPushButton { background-color: red; color: white; }");
+                    statusBar()->showMessage("Detector disabled", 3000);
+                }
+            } else {
+                QMessageBox::warning(this, "Detector On/Off Failed",
+                    QString::fromStdString(resp.data));
+            }
+        });
+}
+
 // ========== Comm 槽函数 ==========
 
 void MainWindow::onCommSetHost()
@@ -639,19 +982,16 @@ void MainWindow::callService(const std::string& service_name,
 
     // 在后台线程执行阻塞的 ZMQ 调用，完成后通过 invokeMethod 回到主线程
     QPointer<MainWindow> self(this);
-    std::cerr << "[callService] " << service_name << "/" << endpoint
-              << " payload=" << payload << " dispatching..." << std::endl;
+    LOG_DEBUG("[callService] %s/%s payload=%s dispatching...", service_name.c_str(), endpoint.c_str(), payload.c_str());
     std::thread([self, svc, endpoint, req, callback, guard, service_name]() {
         ServiceResponse resp;
         try {
             resp = svc->call(endpoint, req);
-            std::cerr << "[callService] " << service_name << "/" << endpoint
-                      << " SUCCESS, data=" << resp.data.substr(0, 80) << std::endl;
+            LOG_DEBUG("[callService] %s/%s SUCCESS, data=%s", service_name.c_str(), endpoint.c_str(), resp.data.substr(0, 80).c_str());
         } catch (const std::exception& e) {
             resp.success = false;
             resp.data = e.what();
-            std::cerr << "[callService] " << service_name << "/" << endpoint
-                      << " FAILED: " << e.what() << std::endl;
+            LOG_ERROR("[callService] %s/%s FAILED: %s", service_name.c_str(), endpoint.c_str(), e.what());
         }
 
         // 回到主线程执行回调
@@ -742,4 +1082,68 @@ void MainWindow::overlayDetections(cv::Mat& mat, const DetectionMsg& msg)
             continue;
         }
     }
+}
+
+void MainWindow::overlayAnnotations(cv::Mat& mat, const AnnotationMsg& msg)
+{
+    LOG_DEBUG("[Manager] overlayAnnotations: 物体数=%d, 图像尺寸=%dx%d", msg.objects.size(), mat.cols, mat.rows);
+    
+    if (msg.objects.empty()) {
+        LOG_DEBUG("[Manager] overlayAnnotations: 物体列表为空，跳过绘制");
+        return;
+    }
+
+    int template_w = static_cast<int>(msg.template_width);
+    int template_h = static_cast<int>(msg.template_height);
+    
+    LOG_DEBUG("[Manager] overlayAnnotations: 模板尺寸=%dx%d", template_w, template_h);
+
+    for (const auto& obj : msg.objects) {
+        LOG_DEBUG("[Manager] 绘制物体#%d: x=%f, y=%f, angle=%f", obj.id, obj.x, obj.y, obj.angle);
+        
+        // 绘制旋转矩形
+        cv::RotatedRect rrect(
+            cv::Point2f(static_cast<float>(obj.x), static_cast<float>(obj.y)),
+            cv::Size2f(static_cast<float>(template_w),
+                       static_cast<float>(template_h)),
+            static_cast<float>(obj.angle)
+        );
+
+        cv::Point2f vertices[4];
+        rrect.points(vertices);
+        for (int j = 0; j < 4; ++j) {
+            cv::line(mat, vertices[j], vertices[(j + 1) % 4],
+                     cv::Scalar(0, 255, 0), 2);
+        }
+
+        // 绘制中心十字
+        int cs = 15;
+        cv::Point center(static_cast<int>(obj.x), static_cast<int>(obj.y));
+        cv::line(mat, cv::Point(center.x - cs, center.y),
+                 cv::Point(center.x + cs, center.y), cv::Scalar(0, 0, 255), 2);
+        cv::line(mat, cv::Point(center.x, center.y - cs),
+                 cv::Point(center.x, center.y + cs), cv::Scalar(0, 0, 255), 2);
+
+        // 绘制物体编号标签
+        char idx_label[32];
+        std::snprintf(idx_label, sizeof(idx_label), "#%d", obj.id);
+        cv::putText(mat, idx_label, cv::Point(center.x + 10, center.y - 10),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
+
+        // 绘制坐标信息
+        char coord_label[64];
+        std::snprintf(coord_label, sizeof(coord_label),
+                      "(%.2f, %.2f, a=%.1f)", obj.x, obj.y, obj.angle);
+        cv::putText(mat, coord_label, cv::Point(center.x + 10, center.y + 15),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 255), 1);
+
+        // 绘制角度指示线
+        double rad = obj.angle * CV_PI / 180.0;
+        cv::line(mat, center,
+                 cv::Point(center.x + static_cast<int>(25 * std::cos(rad)),
+                           center.y + static_cast<int>(25 * std::sin(rad))),
+                 cv::Scalar(0, 255, 0), 2);
+    }
+    
+    LOG_DEBUG("[Manager] overlayAnnotations: 绘制完成");
 }

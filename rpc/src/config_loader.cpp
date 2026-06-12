@@ -1,6 +1,6 @@
 #include "rpc/config_loader.h"
+#include "logger/logger.h"
 #include <opencv2/core.hpp>
-#include <iostream>
 #include <stdexcept>
 
 NodeConfig ConfigLoader::loadSystemConfig(const std::string& xml_path) {
@@ -21,7 +21,7 @@ NodeConfig ConfigLoader::loadSystemConfig(const std::string& xml_path) {
     } else if (transport_str == "ros2") {
         config.transport = TransportType::ROS2;
     } else {
-        std::cerr << "未知传输类型: " << transport_str << "，默认使用 ZeroMQ" << std::endl;
+        LOG_WARN("未知传输类型: %s，默认使用 ZeroMQ", transport_str.c_str());
         config.transport = TransportType::ZEROMQ;
     }
 
@@ -34,6 +34,23 @@ NodeConfig ConfigLoader::loadSystemConfig(const std::string& xml_path) {
     if (base_port_val > 0) {
         config.base_port = static_cast<uint16_t>(base_port_val);
     }
+
+    // 读取 ROS2 专用配置
+    int executor_threads = 0;
+    fs["ros2_executor_threads"] >> executor_threads;
+    if (executor_threads > 0) config.ros2_executor_threads = executor_threads;
+
+    int timeout_ms = 0;
+    fs["service_timeout_ms"] >> timeout_ms;
+    if (timeout_ms > 0) config.service_timeout_ms = timeout_ms;
+
+    int wait_ms = 0;
+    fs["service_wait_ms"] >> wait_ms;
+    if (wait_ms > 0) config.service_wait_ms = wait_ms;
+
+    int max_retries = 0;
+    fs["service_max_retries"] >> max_retries;
+    if (max_retries > 0) config.service_max_retries = max_retries;
 
     // 读取 topic 配置
     std::string topic_frame, topic_detection;

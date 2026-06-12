@@ -1,6 +1,6 @@
 #include "vision_server.h"
+#include "logger/logger.h"
 #include <cstring>
-#include <iostream>
 #include <chrono>
 
 // ========== VisionServer 实现 ==========
@@ -15,7 +15,7 @@ VisionServer::~VisionServer() {
 bool VisionServer::start() {
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd_ == INVALID_SOCK) {
-        std::cerr << "[服务器] 创建 socket 失败: " << getSocketError() << std::endl;
+        LOG_ERROR("[服务器] 创建 socket 失败: %s", getSocketError().c_str());
         return false;
     }
 
@@ -34,21 +34,21 @@ bool VisionServer::start() {
         addr.sin_addr.s_addr = INADDR_ANY;
     } else {
         if (inet_pton(AF_INET, bind_addr_.c_str(), &addr.sin_addr) != 1) {
-            std::cerr << "[服务器] 无效的绑定地址: " << bind_addr_ << ", 使用 INADDR_ANY" << std::endl;
+            LOG_WARN("[服务器] 无效的绑定地址: %s, 使用 INADDR_ANY", bind_addr_.c_str());
             addr.sin_addr.s_addr = INADDR_ANY;
         }
     }
     addr.sin_port = htons(static_cast<unsigned short>(port_));
 
     if (bind(server_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        std::cerr << "[服务器] bind 失败 (端口 " << port_ << "): " << getSocketError() << std::endl;
+        LOG_ERROR("[服务器] bind 失败 (端口 %d): %s", port_, getSocketError().c_str());
         CLOSE_SOCKET(server_fd_);
         server_fd_ = INVALID_SOCK;
         return false;
     }
 
     if (listen(server_fd_, 5) != 0) {
-        std::cerr << "[服务器] listen 失败: " << getSocketError() << std::endl;
+        LOG_ERROR("[服务器] listen 失败: %s", getSocketError().c_str());
         CLOSE_SOCKET(server_fd_);
         server_fd_ = INVALID_SOCK;
         return false;
@@ -57,9 +57,8 @@ bool VisionServer::start() {
     running_ = true;
 
     const char* mode_name[] = {"连接即发送", "收到请求再发送", "持续周期发送"};
-    std::cout << "[服务器] TCP Server 启动, 绑定: " << bind_addr_
-              << ", 端口: " << port_
-              << ", 模式: " << mode_name[static_cast<int>(mode_)] << std::endl;
+    LOG_INFO("[服务器] TCP Server 启动, 绑定: %s, 端口: %d, 模式: %s", 
+             bind_addr_.c_str(), port_, mode_name[static_cast<int>(mode_)]);
 
     accept_thread_ = std::thread(&VisionServer::acceptLoop, this);
     return true;
@@ -114,7 +113,7 @@ void VisionServer::stop() {
         active_clients_.clear();
     }
 
-    std::cout << "[服务器] TCP Server 已停止" << std::endl;
+    LOG_INFO("[服务器] TCP Server 已停止");
 }
 
 void VisionServer::setInterval(int ms) {
@@ -160,7 +159,7 @@ void VisionServer::acceptLoop() {
                                     &client_len);
         if (client_fd == INVALID_SOCK) {
             if (running_) {
-                std::cerr << "[服务器] accept 失败: " << getSocketError() << std::endl;
+                LOG_ERROR("[服务器] accept 失败: %s", getSocketError().c_str());
             }
             continue;
         }
@@ -175,7 +174,7 @@ void VisionServer::acceptLoop() {
         inet_ntop(AF_INET, &client_addr.sin_addr, ip_buf, sizeof(ip_buf));
         std::string addr_str = std::string(ip_buf)
                              + ":" + std::to_string(ntohs(client_addr.sin_port));
-        std::cout << "[服务器] 客户端已连接: " << addr_str << std::endl;
+        LOG_INFO("[服务器] 客户端已连接: %s", addr_str.c_str());
 
         std::lock_guard<std::mutex> lock(threads_mutex_);
         client_threads_.emplace_back(&VisionServer::handleClient, this, client_fd, addr_str);
@@ -206,7 +205,7 @@ void VisionServer::handleClient(socket_t client_fd, const std::string& client_ad
     }
 
     CLOSE_SOCKET(client_fd);
-    std::cout << "[服务器] 客户端已断开: " << client_addr << std::endl;
+    LOG_INFO("[服务器] 客户端已断开: %s", client_addr.c_str());
 }
 
 // ========== 模式1: 客户端连接即发送 ==========
@@ -224,9 +223,9 @@ void VisionServer::handleSendOnConnect(socket_t client_fd, const std::string& cl
 
     int sent = ::send(client_fd, resp.c_str(), static_cast<int>(resp.size()), flags);
     if (sent < 0) {
-        std::cerr << "[服务器] 发送失败 -> " << client_addr << ": " << getSocketError() << std::endl;
+        LOG_ERROR("[服务器] 发送失败 -> %s: %s", client_addr.c_str(), getSocketError().c_str());
     } else {
-        std::cout << "[服务器] 已发送 -> " << client_addr << ": " << resp << std::endl;
+        LOG_DEBUG("[服务器] 已发送 -> %s: %s", client_addr.c_str(), resp.c_str());
     }
 }
 
@@ -242,7 +241,7 @@ void VisionServer::handleSendOnRequest(socket_t client_fd, const std::string& cl
         }
 
         std::string request(buf, n);
-        std::cout << "[服务器] 收到请求 <- " << client_addr << ": " << request << std::endl;
+        LOG_DEBUG("[服务器] 收到请求 <- %s: %s", client_addr.c_str(), request.c_str());
 
         std::string resp;
         {
@@ -257,10 +256,10 @@ void VisionServer::handleSendOnRequest(socket_t client_fd, const std::string& cl
 
         int sent = ::send(client_fd, resp.c_str(), static_cast<int>(resp.size()), flags);
         if (sent < 0) {
-            std::cerr << "[服务器] 发送失败 -> " << client_addr << ": " << getSocketError() << std::endl;
+            LOG_ERROR("[服务器] 发送失败 -> %s: %s", client_addr.c_str(), getSocketError().c_str());
             break;
         }
-        std::cout << "[服务器] 已响应 -> " << client_addr << ": " << resp << std::endl;
+        LOG_DEBUG("[服务器] 已响应 -> %s: %s", client_addr.c_str(), resp.c_str());
     }
 }
 
@@ -280,7 +279,7 @@ void VisionServer::handleSendPeriodic(socket_t client_fd, const std::string& cli
 
         int sent = ::send(client_fd, resp.c_str(), static_cast<int>(resp.size()), flags);
         if (sent < 0) {
-            std::cerr << "[服务器] 发送失败 -> " << client_addr << ": " << getSocketError() << std::endl;
+            LOG_ERROR("[服务器] 发送失败 -> %s: %s", client_addr.c_str(), getSocketError().c_str());
             break;
         }
 

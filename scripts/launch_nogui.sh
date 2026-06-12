@@ -8,6 +8,9 @@ CONFIG_DIR="${INSTALL_DIR}/config"
 LOG_DIR="${INSTALL_DIR}/log"
 TRANSPORT="zeromq"
 
+# ROS2 运行时 dlopen 需要找到自定义 typesupport 库
+export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
+
 # ===== 检测可用的终端模拟器 =====
 detect_terminal() {
     if command -v gnome-terminal &>/dev/null; then
@@ -21,27 +24,6 @@ detect_terminal() {
     else
         echo "none"
     fi
-}
-
-# 在独立终端窗口中分别启动每个节点
-launch_term() {
-    local title="$1"
-    local script_path="$2"
-    case "$TERMINAL" in
-        gnome-terminal)
-            gnome-terminal --title="$title" -- "$script_path" &
-            ;;
-        konsole)
-            konsole -p tabtitle="$title" -e "$script_path" &
-            ;;
-        xfce4-terminal)
-            xfce4-terminal --title="$title" -e "$script_path" &
-            ;;
-        xterm|none)
-            xterm -title "$title" -e "$script_path" 2>/dev/null || bash "$script_path" &
-            ;;
-    esac
-    sleep 0.4
 }
 
 TERMINAL="$(detect_terminal)"
@@ -163,18 +145,48 @@ COMM_LOG="${LOG_DIR}/communication_${LOG_TS}.log"
 COMM_CMD="sleep ${COMM_SLEEP}; ${BIN_DIR}/comm_node --config '${SYSTEM_CONFIG}' --comm-config '${CONFIG_DIR}/communication.xml'"
 COMM_SCRIPT=$(make_script "comm.sh" "$COMM_CMD" "${COMM_LOG}")
 
-echo "[启动] 打开 3 个独立终端窗口..."
+echo "[启动] 打开终端窗口，包含 3 个 Tab 页..."
 echo "  camera       -> ${CAM_LOG}"
 echo "  detector     -> ${DET_LOG}"
 echo "  communication-> ${COMM_LOG}"
 echo ""
-launch_term "Camera"   "$CAM_SCRIPT"
-launch_term "Detector" "$DET_SCRIPT"
-launch_term "Comm"     "$COMM_SCRIPT"
+
+# ===== 在单个终端窗口中使用多个 Tab 页启动所有节点 =====
+case "$TERMINAL" in
+    gnome-terminal)
+        # 先创建主窗口
+        gnome-terminal --window --title="VisionDistribute" &
+        sleep 0.3
+        # 逐个添加 tab
+        gnome-terminal --tab --title="Camera" -- bash -c "$CAM_SCRIPT; exec bash" &
+        sleep 0.2
+        gnome-terminal --tab --title="Detector" -- bash -c "$DET_SCRIPT; exec bash" &
+        sleep 0.2
+        gnome-terminal --tab --title="Comm" -- bash -c "$COMM_SCRIPT; exec bash" &
+        ;;
+    konsole)
+        konsole --new-tab -p tabtitle="Camera" -e "$CAM_SCRIPT" \
+                --new-tab -p tabtitle="Detector" -e "$DET_SCRIPT" \
+                --new-tab -p tabtitle="Comm" -e "$COMM_SCRIPT" &
+        ;;
+    xfce4-terminal)
+        xfce4-terminal --tab --title="Camera" -e "$CAM_SCRIPT" \
+                       --tab --title="Detector" -e "$DET_SCRIPT" \
+                       --tab --title="Comm" -e "$COMM_SCRIPT" &
+        ;;
+    xterm|none)
+        # xterm 不支持 tab，回退到多个窗口模式
+        xterm -title "Camera" -e "$CAM_SCRIPT" 2>/dev/null &
+        sleep 0.4
+        xterm -title "Detector" -e "$DET_SCRIPT" 2>/dev/null &
+        sleep 0.4
+        xterm -title "Comm" -e "$COMM_SCRIPT" 2>/dev/null &
+        ;;
+esac
 
 echo ""
-echo "所有节点已在新终端窗口中启动。"
-echo "  窗口: Camera | Detector | Comm"
+echo "所有节点已在终端 Tab 页中启动。"
+echo "  Tab: Camera | Detector | Comm"
 echo ""
 echo "按 Ctrl+C 停止所有节点..."
 

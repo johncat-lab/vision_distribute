@@ -58,6 +58,9 @@ public:
     // 获取初始角度偏移 (用于反算图像中的视觉角度)
     double getInitialAngleOffset() const { return initial_angle_offset_; }
 
+    // 设置匹配阈值 (运行时动态调整)
+    void setMatchThreshold(float threshold) { match_threshold_ = threshold; }
+
 private:
     // Frame → cv::Mat (BGR)
     cv::Mat frameToBGR(const Frame& frame) const;

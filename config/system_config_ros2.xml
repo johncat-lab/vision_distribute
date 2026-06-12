@@ -10,6 +10,18 @@
 <!-- ROS2 不使用 base_port，保留为默认值即可 -->
 <base_port>15550</base_port>
 
+<!-- ROS2 executor 线程数 (默认4，处理回调的并发线程数) -->
+<ros2_executor_threads>4</ros2_executor_threads>
+
+<!-- 服务调用超时 (毫秒，默认5000) -->
+<service_timeout_ms>5000</service_timeout_ms>
+
+<!-- 等待服务可用超时 (毫秒，默认3000) -->
+<service_wait_ms>3000</service_wait_ms>
+
+<!-- 服务调用最大重试次数 (默认3) -->
+<service_max_retries>3</service_max_retries>
+
 <!-- 帧发布/订阅 topic (camera_node -> detector_node) -->
 <!-- ROS2 topic 命名遵循 ROS2 规范: 小写字母+下划线 -->
 <topic_frame>vision/frame</topic_frame>

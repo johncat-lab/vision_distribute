@@ -6,7 +6,7 @@
 // 各后端的全局初始化函数声明
 #ifdef HAS_ROS2
 namespace ros2_global {
-    void init(const std::string& node_name);
+    void init(const std::string& node_name, int executor_threads);
     void shutdown();
 }
 #endif
@@ -35,7 +35,8 @@ NodeFactory::NodeFactory(const NodeConfig& config)
         break;
     case TransportType::ROS2:
 #ifdef HAS_ROS2
-        ros2_global::init(config.node_name.empty() ? "vision_node" : config.node_name);
+        ros2_global::init(config.node_name.empty() ? "vision_node" : config.node_name, config.ros2_executor_threads);
+        ros2_global::start_executor();
 #else
         throw std::runtime_error("ROS2 backend not available (rebuild with rclcpp)");
 #endif

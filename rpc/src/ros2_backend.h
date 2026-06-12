@@ -2,6 +2,8 @@
 #include "rpc/publisher.h"
 #include "rpc/subscriber.h"
 #include "rpc/service.h"
+#include "rpc/message_types.h"
+#include "logger/logger.h"
 #include <string>
 #include <stdexcept>
 #include <memory>
@@ -9,66 +11,27 @@
 #include <map>
 #include <future>
 #include <atomic>
-#include <iostream>
 #include <cstring>
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <set>
 
 #ifdef HAS_ROS2
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/byte_multi_array.hpp>
-#include <rcl_interfaces/srv/get_parameter_types.hpp>
+// 注意: 不再使用 GetParameterTypes 作为通用载体
+// 各 endpoint 直接使用原生 .srv 类型，由 registerNativeEndpoint<SrvType> 注册
 
 // ========== ROS2 全局上下文 (定义在 ros2_backend.cpp) ==========
 namespace ros2_global {
-    void init(const std::string& node_name);
+    void init(const std::string& node_name, int executor_threads = 4);
+    void start_executor();
     void shutdown();
     rclcpp::Node* getNode();
 }
 
-// ========== 内部工具：base64 编解码 ==========
-// 用于将任意二进制数据编码为 DDS string 字段安全的 ASCII 字符串
-namespace {
-
-static const char kB64Chars[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-inline std::string b64_encode(const std::string& in) {
-    std::string out;
-    out.reserve(((in.size() + 2) / 3) * 4);
-    int val = 0, valb = -6;
-    for (unsigned char c : in) {
-        val = (val << 8) + c;
-        valb += 8;
-        while (valb >= 0) {
-            out.push_back(kB64Chars[(val >> valb) & 0x3F]);
-            valb -= 6;
-        }
-    }
-    if (valb > -6) out.push_back(kB64Chars[((val << 8) >> (valb + 8)) & 0x3F]);
-    while (out.size() % 4) out.push_back('=');
-    return out;
-}
-
-inline std::string b64_decode(const std::string& in) {
-    std::string out;
-    std::vector<int> T(256, -1);
-    for (int i = 0; i < 64; i++) T[(unsigned char)kB64Chars[i]] = i;
-    int val = 0, valb = -8;
-    for (unsigned char c : in) {
-        if (T[c] == -1) break;
-        val = (val << 6) + T[c];
-        valb += 6;
-        if (valb >= 0) {
-            out.push_back((char)((val >> valb) & 0xFF));
-            valb -= 8;
-        }
-    }
-    return out;
-}
-
-} // anonymous namespace
+// base64 编解码已移除 — 原生 service 通道使用类型化字段传输，不再需要 string↔binary 转换
 
 // ========== ROS2 Publisher ==========
 // 使用 std_msgs::msg::ByteMultiArray 承载序列化后的二进制消息
@@ -82,7 +45,8 @@ public:
         if (!node) {
             throw std::runtime_error("ROS2 node not initialized");
         }
-        auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+        // 使用 BestEffort + KeepLast(1) 避免大帧数据拥塞 DDS 传输层
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
         pub_ = node->create_publisher<std_msgs::msg::ByteMultiArray>(topic, qos);
     }
 
@@ -94,7 +58,7 @@ public:
             pub_->publish(std::move(ros_msg));
             return true;
         } catch (const std::exception& e) {
-            std::cerr << "ROS2 publish error on '" << topic_ << "': " << e.what() << std::endl;
+            LOG_ERROR("ROS2 publish error on '%s': %s", topic_.c_str(), e.what());
             return false;
         }
     }
@@ -116,7 +80,8 @@ public:
         if (!node) {
             throw std::runtime_error("ROS2 node not initialized");
         }
-        auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+        // 使用 BestEffort + KeepLast(1) 避免大帧数据拥塞 DDS 传输层
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
         sub_ = node->create_subscription<std_msgs::msg::ByteMultiArray>(
             topic, qos,
             [this](std::unique_ptr<std_msgs::msg::ByteMultiArray> msg) {
@@ -127,8 +92,7 @@ public:
                         T deserialized = T::deserialize(raw);
                         callback_(deserialized);
                     } catch (const std::exception& e) {
-                        std::cerr << "ROS2 subscriber deserialize error on '"
-                                  << topic_ << "': " << e.what() << std::endl;
+                        LOG_ERROR("ROS2 subscriber deserialize error on '%s': %s", topic_.c_str(), e.what());
                     }
                 }
             });
@@ -149,24 +113,30 @@ private:
     std::mutex cb_mutex_;
 };
 
-// ========== ROS2 Service (基于原生 rclcpp::Service/Client) ==========
+// ========== ROS2 Service (纯原生 service 通道) ==========
 //
-// 使用 rcl_interfaces/srv/GetParameterTypes 作为通用二进制载体：
-//   request.names[0]  = base64(ServiceRequest::serialize())  — 避免 DDS string \0 截断
-//   response.types    = ServiceResponse::serialize() 的原始字节（uint8[]，无需编码）
+// 每个 endpoint 对应一个原生 ROS2 service（如 /camera/set_exposure），
+// 不再使用 GetParameterTypes 通用载体，消除 base64 编解码和双通道冗余。
 //
-// 一个 Ros2Service 实例对应一个 native service（名称 = name_）。
-// 多个 endpoint 通过 ServiceRequest.endpoint 字段在 handler map 内部路由。
-// native service 内置请求/响应匹配，彻底消除 DDS 发现时序问题。
+// registerNativeEndpoint<SrvType> 注册 4 个转换 lambda:
+//   toSrvReq:    原生请求 → ServiceRequest (服务端)
+//   fromSrvResp: ServiceResponse → 原生响应 (服务端)
+//   toNativeReq: ServiceRequest → 原生请求 (客户端)
+//   fromNativeResp: 原生响应 → ServiceResponse (客户端)
+//
+// serve() 为该 endpoint 创建原生 service。
+// call() 通过原生 client 调用，自动做 ServiceRequest ↔ 原生请求转换。
+// preconnect() 预创建所有已注册 endpoint 的原生 client。
 
 template<typename Request, typename Response>
 class Ros2Service : public IService<Request, Response> {
     using Handler = typename IService<Request, Response>::Handler;
-    using SrvType = rcl_interfaces::srv::GetParameterTypes;
 
 public:
-    explicit Ros2Service(const std::string& name)
-        : name_(name) {
+    explicit Ros2Service(const std::string& name, int timeout_ms = 5000,
+                         int wait_ms = 3000, int max_retries = 3)
+        : name_(name), timeout_ms_(timeout_ms), wait_ms_(wait_ms), max_retries_(max_retries)
+    {
         auto* node = ros2_global::getNode();
         if (!node) {
             throw std::runtime_error("ROS2 node not initialized");
@@ -174,142 +144,193 @@ public:
         node_ = node;
     }
 
-    bool serve(const std::string& endpoint, Handler handler) override {
-        {
-            std::lock_guard<std::mutex> lock(handlers_mutex_);
-            handlers_[endpoint] = std::move(handler);
+    // ========== 预连接：提前创建所有已注册 endpoint 的原生 client ==========
+    void preconnect() override {
+        std::lock_guard<std::mutex> lock(native_mutex_);
+        for (auto& [endpoint, config] : native_srv_configs_) {
+            config.preconnect_client(node_);
         }
+    }
 
-        // 首次调用时创建 native service（只创建一次，后续 serve 仅注册 handler）
-        if (!ros2_service_) {
-            ros2_service_ = node_->create_service<SrvType>(
-                name_,
-                [this](const std::shared_ptr<SrvType::Request> req,
-                       std::shared_ptr<SrvType::Response> resp) {
-                    // 解码请求：base64 -> 原始字节 -> Request
-                    if (req->names.empty()) {
-                        std::cerr << "[Ros2Service::serve " << name_
-                                  << "] empty request" << std::endl;
-                        return;
-                    }
-                    std::string raw = b64_decode(req->names[0]);
-                    Request sreq;
-                    try {
-                        sreq = Request::deserialize(raw);
-                    } catch (const std::exception& e) {
-                        std::cerr << "[Ros2Service::serve " << name_
-                                  << "] deserialize error: " << e.what() << std::endl;
-                        return;
-                    }
+    // ========== 注册原生 ROS2 service 类型映射 (双向转换) ==========
+    // 在 serve() 前调用，声明端点对应的 .srv 类型及双向请求/响应转换。
+    // serve() 自动为已注册的端点创建原生 ROS2 service。
+    // call() 自动为已注册的端点创建原生 client 并做类型转换。
+    //
+    // @param endpoint      端点名（如 "set_exposure")
+    // @param toSrvReq      原生请求 → ServiceRequest (服务端接收时使用)
+    // @param fromSrvResp   ServiceResponse → 原生响应 (服务端返回时使用)
+    // @param toNativeReq   ServiceRequest → 原生请求 (客户端发送时使用)
+    // @param fromNativeResp 原生响应 → ServiceResponse (客户端接收时使用)
+    template<typename SrvType>
+    void registerNativeEndpoint(
+        const std::string& endpoint,
+        std::function<ServiceRequest(const std::shared_ptr<typename SrvType::Request>&)> toSrvReq,
+        std::function<void(const ServiceResponse&, std::shared_ptr<typename SrvType::Response>)> fromSrvResp,
+        std::function<std::shared_ptr<typename SrvType::Request>(const ServiceRequest&)> toNativeReq,
+        std::function<ServiceResponse(const std::shared_ptr<typename SrvType::Response>&)> fromNativeResp)
+    {
+        std::string global_name = (name_.empty() || name_[0] == '/') ? name_ : "/" + name_;
+        std::string full_name = global_name + "/" + endpoint;
 
-                    std::cerr << "[Ros2Service::serve " << name_
-                              << "] endpoint='" << sreq.endpoint << "'" << std::endl;
+        // 客户端持有者: shared_ptr<rclcpp::Client<SrvType>::SharedPtr>
+        // 类型擦除: lambda 内部捕获此 holder，外部仅通过 std::function 调用
+        auto client_holder = std::make_shared<typename rclcpp::Client<SrvType>::SharedPtr>();
+        auto client_mtx = std::make_shared<std::mutex>();
 
-                    // 查找 handler
-                    Handler h;
-                    {
-                        std::lock_guard<std::mutex> lock(handlers_mutex_);
-                        auto it = handlers_.find(sreq.endpoint);
-                        if (it == handlers_.end()) {
-                            std::cerr << "[Ros2Service::serve " << name_
-                                      << "] unknown endpoint: " << sreq.endpoint << std::endl;
-                            return;
+        // 显式构造 std::function 以避免 GCC 对模板内局部类型聚合初始化的限制
+        std::function<void(rclcpp::Node*, Handler)> create_srv_fn =
+            [full_name, toSrvReq = std::move(toSrvReq), fromSrvResp = std::move(fromSrvResp),
+             services = services_holder_]
+            (rclcpp::Node* node, Handler handler) {
+                auto srv = node->create_service<SrvType>(
+                    full_name,
+                    [handler = std::move(handler), toSrvReq, fromSrvResp, full_name]
+                    (const std::shared_ptr<typename SrvType::Request> req,
+                     std::shared_ptr<typename SrvType::Response> resp) {
+                        LOG_INFO("[Ros2Service::native] %s 收到请求", full_name.c_str());
+                        try {
+                            auto sreq = toSrvReq(req);
+                            auto sresp = handler(sreq);
+                            fromSrvResp(sresp, resp);
+                        } catch (const std::exception& e) {
+                            LOG_ERROR("[Ros2Service::native] %s 异常: %s",
+                                      full_name.c_str(), e.what());
                         }
-                        h = it->second;
+                    });
+                services->push_back(srv);
+                LOG_INFO("[Ros2Service] 原生 service 已创建: %s", full_name.c_str());
+            };
+
+        std::function<void(rclcpp::Node*)> preconnect_client_fn =
+            [full_name, client_holder, client_mtx]
+            (rclcpp::Node* node) {
+                std::lock_guard<std::mutex> lock(*client_mtx);
+                if (!*client_holder) {
+                    *client_holder = node->create_client<SrvType>(full_name);
+                    LOG_INFO("[Ros2Service] 原生 client 预连接: %s", full_name.c_str());
+                }
+            };
+
+        // 捕获成员变量值而非 this 指针，避免模板上下文中 GCC 对 local type 的限制
+        int timeout_ms = timeout_ms_;
+        int max_retries = max_retries_;
+
+        std::function<ServiceResponse(rclcpp::Node*, const ServiceRequest&)> call_native_fn =
+            [full_name, toNativeReq = std::move(toNativeReq), fromNativeResp = std::move(fromNativeResp),
+             client_holder, client_mtx, timeout_ms, max_retries]
+            (rclcpp::Node* node, const ServiceRequest& req) -> ServiceResponse {
+                // 创建 client if needed
+                {
+                    std::lock_guard<std::mutex> lock(*client_mtx);
+                    if (!*client_holder) {
+                        *client_holder = node->create_client<SrvType>(full_name);
+                        LOG_INFO("[Ros2Service] 原生 client 已创建: %s", full_name.c_str());
+                    }
+                }
+                auto client = *client_holder;
+
+                // 注意: 不调用 wait_for_service()！
+                // wait_for_service() 内部会启动临时 executor 轮询，
+                // 与已运行的 MultiThreadedExecutor 竞争节点所有权，
+                // 导致回调被临时 executor 消费后丢失。
+                // 直接发请求，用 future 超时覆盖 service 不可用的情况。
+
+                for (int retry = 0; retry < max_retries; ++retry) {
+                    LOG_INFO("[Ros2Service::call] %s 发送请求 (尝试 %d/%d)",
+                             full_name.c_str(), retry + 1, max_retries);
+
+                    auto native_req = toNativeReq(req);
+                    auto future = client->async_send_request(native_req);
+
+                    auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
+                    if (status == std::future_status::timeout) {
+                        LOG_WARN("[Ros2Service::call] %s 超时 (重试 %d/%d)",
+                                 full_name.c_str(), retry + 1, max_retries);
+                        if (retry < max_retries - 1) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                            continue;
+                        }
+                        throw std::runtime_error("ROS2 service call timeout: " + full_name);
                     }
 
-                    // 调用业务 handler
-                    Response sresp;
-                    try {
-                        sresp = h(sreq);
-                    } catch (const std::exception& e) {
-                        std::cerr << "[Ros2Service::serve " << name_
-                                  << "] handler error: " << e.what() << std::endl;
-                        sresp = Response();
-                    }
+                    auto native_resp = future.get();
+                    return fromNativeResp(native_resp);
+                }
 
-                    // 编码响应：原始字节 -> uint8[]（直接存储，无需 base64）
-                    std::string bytes = sresp.serialize();
-                    resp->types.assign(bytes.begin(), bytes.end());
+                throw std::runtime_error("ROS2 service call failed: " + full_name);
+            };
 
-                    std::cerr << "[Ros2Service::serve " << name_
-                              << "] response size=" << bytes.size() << "B" << std::endl;
-                });
+        std::lock_guard<std::mutex> lock(native_mutex_);
+        native_srv_configs_[endpoint] = NativeEndpointConfig{
+            full_name,
+            std::move(create_srv_fn),
+            std::move(preconnect_client_fn),
+            std::move(call_native_fn)
+        }; // NativeEndpointConfig end
 
-            std::cerr << "[Ros2Service] " << name_
-                      << " native service created, endpoint=" << endpoint << std::endl;
-        } else {
-            std::cerr << "[Ros2Service] " << name_
-                      << " handler registered: " << endpoint << std::endl;
+        LOG_INFO("[Ros2Service] 类型映射已注册: %s → %s",
+                 endpoint.c_str(), full_name.c_str());
+    }
+
+    bool serve(const std::string& endpoint, Handler handler) override {
+        std::lock_guard<std::mutex> lock(native_mutex_);
+        auto it = native_srv_configs_.find(endpoint);
+        if (it == native_srv_configs_.end()) {
+            LOG_ERROR("[Ros2Service::serve] 无类型映射的端点: %s/%s"
+                      " — 必须先调用 registerNativeEndpoint",
+                      name_.c_str(), endpoint.c_str());
+            throw std::runtime_error(
+                "No native endpoint registered for: " + name_ + "/" + endpoint);
         }
 
+        if (native_services_created_.find(endpoint) == native_services_created_.end()) {
+            it->second.create_srv(node_, handler);
+            native_services_created_.insert(endpoint);
+        } else {
+            LOG_WARN("[Ros2Service::serve] %s/%s service 已存在，跳过重复创建",
+                     name_.c_str(), endpoint.c_str());
+        }
         return true;
     }
 
     Response call(const std::string& endpoint, const Request& req) override {
-        (void)endpoint;
-
-        auto t0 = std::chrono::steady_clock::now();
-        auto ms = [&t0]() {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t0).count();
-        };
-
-        // 惰性创建 client
-        std::call_once(client_init_flag_, [this]() {
-            ros2_client_ = node_->create_client<SrvType>(name_);
-        });
-
-        // 不调用 wait_for_service()：
-        // wait_for_service() 内部会启动临时 executor 轮询，
-        // 与已运行的 MultiThreadedExecutor 竞争节点所有权，
-        // 导致 response callback 被临时 executor 消费后丢失，promise 永远不被填充。
-        // 直接发请求，promise 超时自然覆盖 service 不可用的情况。
-        std::cerr << "[Ros2Service::call] " << name_ << "/" << endpoint
-                  << " +0ms sending..." << std::endl;
-
-        auto ros_req = std::make_shared<SrvType::Request>();
-        ros_req->names.push_back(b64_encode(req.serialize()));
-
-        auto promise = std::make_shared<std::promise<typename SrvType::Response::SharedPtr>>();
-        auto std_future = promise->get_future();
-
-        ros2_client_->async_send_request(
-            ros_req,
-            [promise, name = name_, endpoint, ms](rclcpp::Client<SrvType>::SharedFuture f) {
-                std::cerr << "[Ros2Service::callback] " << name << "/" << endpoint
-                          << " +" << ms() << "ms callback fired!" << std::endl;
-                promise->set_value(f.get());
-            });
-
-        if (std_future.wait_for(std::chrono::seconds(10)) == std::future_status::timeout) {
-            std::cerr << "[Ros2Service::call] " << name_ << "/" << endpoint
-                      << " +" << ms() << "ms TIMEOUT, callback never fired" << std::endl;
+        std::lock_guard<std::mutex> lock(native_mutex_);
+        auto it = native_srv_configs_.find(endpoint);
+        if (it == native_srv_configs_.end()) {
             throw std::runtime_error(
-                "ROS2 service call timeout: " + name_ + "/" + endpoint);
+                "No native endpoint registered for: " + name_ + "/" + endpoint);
         }
-
-        auto ros_resp = std_future.get();
-        std::string bytes(ros_resp->types.begin(), ros_resp->types.end());
-
-        std::cerr << "[Ros2Service::call] " << name_ << "/" << endpoint
-                  << " +" << ms() << "ms response " << bytes.size() << "B" << std::endl;
-
-        return Response::deserialize(bytes);
+        // call_native 内部管理 client 创建/复用、等待可用、发送请求、接收响应
+        return it->second.call_native(node_, req);
     }
 
 private:
     std::string name_;
     rclcpp::Node* node_ = nullptr;
 
-    // 服务端
-    rclcpp::Service<SrvType>::SharedPtr ros2_service_;
-    std::map<std::string, Handler> handlers_;
-    std::mutex handlers_mutex_;
+    // 超时/重试配置 (来自 NodeConfig)
+    int timeout_ms_ = 5000;
+    int wait_ms_ = 3000;
+    int max_retries_ = 3;
 
-    // 客户端
-    rclcpp::Client<SrvType>::SharedPtr ros2_client_;
-    std::once_flag client_init_flag_;
+    // === 类型擦除的原生 endpoint 配置 ===
+    // 每个 endpoint 配置包含: 服务端 create_srv + 客户端 preconnect_client/call_native
+    // 实际的 SrvType 在 registerNativeEndpoint<SrvType> 模板实例化时确定,
+    // 通过 lambda 捕获实现类型擦除, 外部仅需调用 std::function
+    struct NativeEndpointConfig {
+        std::string full_name;
+        std::function<void(rclcpp::Node*, Handler)> create_srv;
+        std::function<void(rclcpp::Node*)> preconnect_client;
+        std::function<ServiceResponse(rclcpp::Node*, const ServiceRequest&)> call_native;
+    };
+    std::map<std::string, NativeEndpointConfig> native_srv_configs_;
+    std::set<std::string> native_services_created_;
+    std::mutex native_mutex_;
+
+    // 持有所有 create_service 返回的 shared_ptr，防止 service 对象被提前销毁
+    std::shared_ptr<std::vector<rclcpp::ServiceBase::SharedPtr>> services_holder_ =
+        std::make_shared<std::vector<rclcpp::ServiceBase::SharedPtr>>();
 };
 
 #else  // !HAS_ROS2 — 存根实现
@@ -341,13 +362,14 @@ private:
 template<typename Request, typename Response>
 class Ros2Service : public IService<Request, Response> {
 public:
-    Ros2Service(const std::string& name) : name_(name) {}
+    Ros2Service(const std::string& name, int = 5000, int = 3000, int = 3) : name_(name) {}
+    void preconnect() override {}
     bool serve(const std::string&,
                typename IService<Request, Response>::Handler) override {
-        throw std::runtime_error("ROS2 backend not available (compile with -DHAS_ROS2)");
+        throw std::runtime_error("ROS2 backend not available (rebuild with rclcpp)");
     }
     Response call(const std::string&, const Request&) override {
-        throw std::runtime_error("ROS2 backend not available (compile with -DHAS_ROS2)");
+        throw std::runtime_error("ROS2 backend not available (rebuild with rclcpp)");
     }
 private:
     std::string name_;

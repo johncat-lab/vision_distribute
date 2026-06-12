@@ -1,6 +1,6 @@
 #include "tcp_client.h"
+#include "logger/logger.h"
 #include <cstring>
-#include <iostream>
 #include <chrono>
 
 // ========== 跨平台辅助函数 ==========
@@ -10,7 +10,7 @@ bool platformSocketInit() {
     WSADATA wsa;
     int ret = WSAStartup(MAKEWORD(2, 2), &wsa);
     if (ret != 0) {
-        std::cerr << "[错误] WSAStartup 失败, 错误码: " << ret << std::endl;
+        LOG_ERROR("[错误] WSAStartup 失败, 错误码: %d", ret);
         return false;
     }
 #endif
@@ -57,7 +57,7 @@ bool TcpClient::connect() {
 
     sock_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (sock_fd_ == INVALID_SOCK) {
-        std::cerr << "[客户端] 创建 socket 失败: " << getSocketError() << std::endl;
+        LOG_ERROR("[客户端] 创建 socket 失败: %s", getSocketError().c_str());
         return false;
     }
 
@@ -72,20 +72,19 @@ bool TcpClient::connect() {
     addr.sin_port = htons(static_cast<unsigned short>(port_));
 
     if (inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) <= 0) {
-        std::cerr << "[客户端] 无效的服务器地址: " << host_ << std::endl;
+        LOG_ERROR("[客户端] 无效的服务器地址: %s", host_.c_str());
         closeSocket();
         return false;
     }
 
     if (::connect(sock_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        std::cerr << "[客户端] 连接失败 (" << host_ << ":" << port_ << "): "
-                  << getSocketError() << std::endl;
+        LOG_ERROR("[客户端] 连接失败 (%s:%d): %s", host_.c_str(), port_, getSocketError().c_str());
         closeSocket();
         return false;
     }
 
     connected_.store(true);
-    std::cout << "[客户端] 已连接到服务器: " << host_ << ":" << port_ << std::endl;
+    LOG_INFO("[客户端] 已连接到服务器: %s:%d", host_.c_str(), port_);
 
     if (connect_callback_) {
         connect_callback_(true);
@@ -110,7 +109,7 @@ void TcpClient::disconnect() {
         }
     }
 
-    std::cout << "[客户端] 已断开连接" << std::endl;
+    LOG_INFO("[客户端] 已断开连接");
 }
 
 bool TcpClient::isConnected() const {
@@ -131,7 +130,7 @@ bool TcpClient::send(const std::string& data) {
 
     int sent = ::send(sock_fd_, data.c_str(), static_cast<int>(data.size()), flags);
     if (sent <= 0) {
-        std::cerr << "[客户端] 发送失败: " << getSocketError() << std::endl;
+        LOG_ERROR("[客户端] 发送失败: %s", getSocketError().c_str());
 
         // 标记断连
         connected_.store(false);
@@ -163,7 +162,7 @@ void TcpClient::setConnectCallback(std::function<void(bool connected)> callback)
 void TcpClient::reconnectLoop() {
     while (running_.load()) {
         if (!connected_.load() && auto_reconnect_.load()) {
-            std::cout << "[客户端] 尝试重连 " << host_ << ":" << port_ << " ..." << std::endl;
+            LOG_INFO("[客户端] 尝试重连 %s:%d ...", host_.c_str(), port_);
             connect();
         }
 

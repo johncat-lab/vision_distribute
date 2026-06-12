@@ -1,4 +1,5 @@
 #include "hik_camera.h"
+#include "logger/logger.h"
 #include <cstring>
 
 // ========== 构造函数 / 析构函数 ==========
@@ -24,7 +25,7 @@ bool HikCamera::enumDevices(std::vector<MV_CC_DEVICE_INFO>& devices) {
     }
 
     if (devList.nDeviceNum == 0) {
-        std::cout << "[海康相机] 未发现设备" << std::endl;
+        LOG_INFO("[海康相机] 未发现设备");
         return true;
     }
 
@@ -34,13 +35,13 @@ bool HikCamera::enumDevices(std::vector<MV_CC_DEVICE_INFO>& devices) {
         }
     }
 
-    std::cout << "[海康相机] 发现 " << devices.size() << " 个设备" << std::endl;
+    LOG_INFO("[海康相机] 发现 %d 个设备", devices.size());
     return true;
 }
 
 bool HikCamera::open(int deviceIndex) {
     if (is_open_.load()) {
-        std::cerr << "[海康相机] 设备已打开" << std::endl;
+        LOG_WARN("[海康相机] 设备已打开");
         return false;
     }
 
@@ -55,13 +56,12 @@ bool HikCamera::open(int deviceIndex) {
     }
 
     if (devList.nDeviceNum == 0) {
-        std::cerr << "[海康相机] 未发现设备" << std::endl;
+        LOG_ERROR("[海康相机] 未发现设备");
         return false;
     }
 
     if (deviceIndex < 0 || static_cast<unsigned int>(deviceIndex) >= devList.nDeviceNum) {
-        std::cerr << "[海康相机] 设备索引超出范围: " << deviceIndex
-                  << ", 可用数量: " << devList.nDeviceNum << std::endl;
+        LOG_ERROR("[海康相机] 设备索引超出范围: %d, 可用数量: %d", deviceIndex, devList.nDeviceNum);
         return false;
     }
 
@@ -87,7 +87,7 @@ bool HikCamera::open(int deviceIndex) {
     has_device_info_ = true;
 
     is_open_.store(true);
-    std::cout << "[海康相机] 设备已打开: " << getDeviceInfoString() << std::endl;
+    LOG_INFO("[海康相机] 设备已打开: %s", getDeviceInfoString().c_str());
 
     // 注册图像回调
     ret = MV_CC_RegisterImageCallBackEx(handle_, imageCallbackBridge, this);
@@ -114,7 +114,7 @@ void HikCamera::close() {
 
     is_open_.store(false);
     has_device_info_ = false;
-    std::cout << "[海康相机] 设备已关闭" << std::endl;
+    LOG_INFO("[海康相机] 设备已关闭");
 }
 
 bool HikCamera::isOpen() const {
@@ -125,12 +125,12 @@ bool HikCamera::isOpen() const {
 
 bool HikCamera::startGrabbing() {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开，无法开始取流" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开，无法开始取流");
         return false;
     }
 
     if (is_grabbing_.load()) {
-        std::cout << "[海康相机] 已在取流中" << std::endl;
+        LOG_INFO("[海康相机] 已在取流中");
         return true;
     }
 
@@ -141,7 +141,7 @@ bool HikCamera::startGrabbing() {
     }
 
     is_grabbing_.store(true);
-    std::cout << "[海康相机] 开始取流" << std::endl;
+    LOG_INFO("[海康相机] 开始取流");
     return true;
 }
 
@@ -159,7 +159,7 @@ bool HikCamera::stopGrabbing() {
     }
 
     is_grabbing_.store(false);
-    std::cout << "[海康相机] 停止取流" << std::endl;
+    LOG_INFO("[海康相机] 停止取流");
     return true;
 }
 
@@ -175,7 +175,7 @@ void HikCamera::setImageCallback(HikImageCallback callback) {
 
 bool HikCamera::setExposureAuto(HikExposureAuto mode) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -192,13 +192,13 @@ bool HikCamera::setExposureAuto(HikExposureAuto mode) {
         return false;
     }
 
-    std::cout << "[海康相机] 自动曝光模式已设置: " << static_cast<int>(mode) << std::endl;
+    LOG_INFO("[海康相机] 自动曝光模式已设置: %d", static_cast<int>(mode));
     return true;
 }
 
 bool HikCamera::setExposureTime(float exposureTimeUs) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -208,13 +208,13 @@ bool HikCamera::setExposureTime(float exposureTimeUs) {
         return false;
     }
 
-    std::cout << "[海康相机] 曝光时间已设置: " << exposureTimeUs << " us" << std::endl;
+    LOG_INFO("[海康相机] 曝光时间已设置: %f us", exposureTimeUs);
     return true;
 }
 
 bool HikCamera::setGainAuto(HikGainAuto mode) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -231,13 +231,13 @@ bool HikCamera::setGainAuto(HikGainAuto mode) {
         return false;
     }
 
-    std::cout << "[海康相机] 自动增益模式已设置: " << static_cast<int>(mode) << std::endl;
+    LOG_INFO("[海康相机] 自动增益模式已设置: %d", static_cast<int>(mode));
     return true;
 }
 
 bool HikCamera::setGain(float gain) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -247,13 +247,13 @@ bool HikCamera::setGain(float gain) {
         return false;
     }
 
-    std::cout << "[海康相机] 增益已设置: " << gain << std::endl;
+    LOG_INFO("[海康相机] 增益已设置: %f", gain);
     return true;
 }
 
 bool HikCamera::setTriggerMode(HikTriggerMode mode) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -265,13 +265,13 @@ bool HikCamera::setTriggerMode(HikTriggerMode mode) {
         return false;
     }
 
-    std::cout << "[海康相机] 触发模式已设置: " << (value == MV_TRIGGER_MODE_ON ? "ON" : "OFF") << std::endl;
+    LOG_INFO("[海康相机] 触发模式已设置: %s", value == MV_TRIGGER_MODE_ON ? "ON" : "OFF");
     return true;
 }
 
 bool HikCamera::setTriggerSource(HikTriggerSource source) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -289,13 +289,13 @@ bool HikCamera::setTriggerSource(HikTriggerSource source) {
         return false;
     }
 
-    std::cout << "[海康相机] 触发源已设置: " << static_cast<int>(source) << std::endl;
+    LOG_INFO("[海康相机] 触发源已设置: %d", static_cast<int>(source));
     return true;
 }
 
 bool HikCamera::triggerSoftware() {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -310,7 +310,7 @@ bool HikCamera::triggerSoftware() {
 
 bool HikCamera::setWidth(int width) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -320,13 +320,13 @@ bool HikCamera::setWidth(int width) {
         return false;
     }
 
-    std::cout << "[海康相机] 图像宽度已设置: " << width << std::endl;
+    LOG_INFO("[海康相机] 图像宽度已设置: %d", width);
     return true;
 }
 
 bool HikCamera::setHeight(int height) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -336,13 +336,13 @@ bool HikCamera::setHeight(int height) {
         return false;
     }
 
-    std::cout << "[海康相机] 图像高度已设置: " << height << std::endl;
+    LOG_INFO("[海康相机] 图像高度已设置: %d", height);
     return true;
 }
 
 bool HikCamera::setPixelFormat(const std::string& format) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -352,13 +352,13 @@ bool HikCamera::setPixelFormat(const std::string& format) {
         return false;
     }
 
-    std::cout << "[海康相机] 像素格式已设置: " << format << std::endl;
+    LOG_INFO("[海康相机] 像素格式已设置: %s", format.c_str());
     return true;
 }
 
 bool HikCamera::setFrameRate(float fps) {
     if (!is_open_.load()) {
-        std::cerr << "[海康相机] 设备未打开" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开");
         return false;
     }
 
@@ -368,7 +368,7 @@ bool HikCamera::setFrameRate(float fps) {
         return false;
     }
 
-    std::cout << "[海康相机] 帧率已设置: " << fps << " fps" << std::endl;
+    LOG_INFO("[海康相机] 帧率已设置: %f fps", fps);
     return true;
 }
 
@@ -503,7 +503,7 @@ bool HikCamera::saveImage(const std::string& filepath,
                           unsigned short width, unsigned short height,
                           unsigned int pixelType, int format) {
     if (!is_open_.load() || handle_ == nullptr) {
-        std::cerr << "[海康相机] 设备未打开，无法保存图像" << std::endl;
+        LOG_ERROR("[海康相机] 设备未打开，无法保存图像");
         return false;
     }
 
@@ -533,19 +533,17 @@ bool HikCamera::saveImage(const std::string& filepath,
     // 写入文件
     FILE* fp = fopen(filepath.c_str(), "wb");
     if (fp == nullptr) {
-        std::cerr << "[海康相机] 无法创建文件: " << filepath << std::endl;
+        LOG_ERROR("[海康相机] 无法创建文件: %s", filepath.c_str());
         return false;
     }
 
     fwrite(saveParam.pImageBuffer, 1, saveParam.nImageLen, fp);
     fclose(fp);
 
-    std::cout << "[海康相机] 图像已保存: " << filepath
-              << " (" << width << "x" << height << ", " << saveParam.nImageLen << " bytes)" << std::endl;
+    LOG_INFO("[海康相机] 图像已保存: %s (%dx%d, %d bytes)", filepath.c_str(), width, height, saveParam.nImageLen);
     return true;
 }
 
 void HikCamera::printError(const std::string& operation, int errorCode) {
-    std::cerr << "[海康相机] " << operation << " 失败, 错误码: 0x"
-              << std::hex << errorCode << std::dec << std::endl;
+    LOG_ERROR("[海康相机] %s 失败, 错误码: 0x%x", operation.c_str(), errorCode);
 }

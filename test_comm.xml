@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<opencv_storage>
+<mode>server</mode>
+<host>"192.168.1.211"</host>
+<port>7930</port>
+<server_mode>2</server_mode>
+<interval_ms>100</interval_ms>
+</opencv_storage>

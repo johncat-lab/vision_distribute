@@ -26,7 +26,7 @@ void init() {
             throw std::runtime_error("[Zenoh] 无法打开 session，请确认 zenohd 已启动或网络可达");
         }
 
-        std::cout << "[Zenoh] session 已建立" << std::endl;
+        LOG_INFO("[Zenoh] session 已建立");
     });
 }
 
@@ -34,7 +34,7 @@ void shutdown() {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (z_session_check(&g_session)) {
         z_close(z_move(g_session));
-        std::cout << "[Zenoh] session 已关闭" << std::endl;
+        LOG_INFO("[Zenoh] session 已关闭");
     }
 }
 

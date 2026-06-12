@@ -1,5 +1,133 @@
-[Ros2Service::call] name=camera endpoint=get_config corr_id=[Ros2Service::call] name=detector endpoint=get_config corr_id=28 req.payload= svc_req.payload.size=18 endpoint_in_req='get_config29 req.payload= svc_req.payload.size=[Ros2Service::call] name=comm endpoint=get_status corr_id=30 req.payload= svc_req.payload.size=18 endpoint_in_req='get_status'
-18 endpoint_in_req='get_config'
-'
-[callService] camera/get_config FAILED: ROS2 service call timeout: camera/get_config[callService] comm/get_status FAILED: ROS2 service call timeout: comm/get_status
-[callService] detector/get_config FAILED: ROS2 service call timeout: detector/get_config
+
+找到了 log 目录。让我读取所有相关日志文件来分析问题。
+现在我需要查看 backend 实现代码来深入分析。让我读取关键的 ROS2 backend 和 service 实现文件。
+让我再看看 node_factory 和相关配置加载。
+现在我已经有了完整的分析。让我总结一下。
+
+---
+
+## 分析结论：backend 实现问题是主要原因
+
+通过分析所有日志和源码，问题的**根本原因在 backend（ROS2/DDS 传输层）**，而非 manager 的调用模式。具体有以下几个层面：
+
+---
+
+### 1. 核心瓶颈：DDS 传输层被海量帧数据拥塞
+
+从 detector 日志可以看到：
+```
+[检测] 帧#10 (4096x3000) 检测到 1 个物体 -> ...
+[模版检测] 检测耗时: 总计=1390.52ms
+[警告] 帧队列已满，丢弃帧#21...丢弃帧#57
+```
+
+**每帧 4096×3000 Mono8 ≈ 12MB**，相机以 30fps 发布。而 detector 处理一帧需要 **1400-2000ms**，消费速度仅 0.5~0.7fps。
+
+`ros2_backend.h` 第85行 QoS 配置：
+```cpp
+auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+```
+
+**Reliable（可靠传输）+ 12MB 帧 + 30fps** 的组合是致命的：
+- 12MB 单帧在 UDP DDS 中被分片为 ~8571 个包
+- Reliable 要求发送方等待订阅方 ACK
+- detector 消费不过来 → DDS 发送缓冲区堆积 → **所有 DDS 消息（包括 service 请求/响应）全局性延迟**
+
+---
+
+### 2. 关键证据：三个 service 同时超时
+
+从 manager 日志中提取每次 service 调用的回调触发时间：
+
+| 批次 | camera/get_config | detector/get_config | comm/get_status |
+|------|-------------------|---------------------|-----------------|
+| 第1次 | **+24ms** | **+43ms** | **+43ms** |
+| 第2次 | +1ms | +0ms | +0ms |
+| 第3次 | **+2249ms** | **+2249ms** | **+2247ms** |
+| 第4次 | **+8634ms** | **+8634ms** | **+8632ms** |
+| 第5次 | +1173ms | +1175ms | +1175ms |
+| 第6次 | +3258ms | +3249ms | +3258ms |
+| 第7次 | **TIMEOUT** | **TIMEOUT** | **TIMEOUT** |
+| 第8次 | TIMEOUT | TIMEOUT | TIMEOUT |
+
+**camera、detector、comm 是三个独立进程**，它们的 service handler 都非常轻量（只是返回配置字符串），但三个 service 的响应延迟**几乎完全同步增长然后一起超时**。这只能说明是 **DDS 传输层被全局性阻塞**，而非某个 server 处理慢。
+
+---
+
+### 3. `Ros2Service::call()` 的同步阻塞设计加剧了问题
+
+`ros2_backend.h` 第250-341行的 `call()` 实现：
+
+```cpp
+Response call(const std::string& endpoint, const Request& req) override {
+    // ...
+    auto promise = std::make_shared<std::promise<...>>();
+    auto std_future = promise->get_future();
+
+    auto future = client->async_send_request(ros_req,
+        [promise, ...](rclcpp::Client<SrvType>::SharedFuture f) {
+            promise->set_value(f.get());  // 由 executor 线程回调
+        });
+
+    auto status = std_future.wait_for(std::chrono::seconds(10));  // 阻塞等待！
+    // ...
+}
+```
+
+虽然 manager 在 `main_window.cpp` 第662行用 `std::thread(...).detach()` 把调用放到后台线程，但 `call()` 内部的 `future::wait_for(10s)` 仍然**同步阻塞**那个后台线程。当 DDS 拥塞导致响应迟迟不来，大量线程堆积在 `wait_for` 上。
+
+---
+
+### 4. 检测耗时本身也在递增（副因）
+
+detector 日志中检测耗时：
+```
+帧#10: 1390ms  →  帧#14: 1566ms  →  帧#16: 1885ms  →  帧#20: 1895ms
+→  帧#234: 1929ms  →  帧#344: 2023ms
+```
+
+检测耗时从 1390ms 逐步增长到 2023ms，可能原因：
+- OpenCV `matchTemplate` 在大图上的内存分配碎片
+- 全图回退搜索随着匹配分数下降搜索范围变大
+
+这进一步降低了 detector 的消费速率，加剧 DDS 拥塞。
+
+---
+
+### 修复建议
+
+按优先级排列：
+
+**1. (最紧急) 降低帧发布分辨率或使用共享内存传输**
+
+在 camera 发布前做降采样，或使用 ROS2 intra-process / shared memory transport 避免 UDP 分片：
+```cpp
+// 方案A：使用 BestEffort + KeepLast(1) 代替 Reliable
+auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+
+// 方案B：降低发布分辨率
+// 在 camera image callback 中 resize 后再发布
+```
+
+**2. 将 `Ros2Service::call()` 改为真正的异步，去掉 `wait_for` 阻塞**
+
+当前阻塞式调用与 DDS 拥塞叠加导致雪崩。应该改为异步回调模式，让 manager 的 `callService` 直接使用 `async_send_request` 的回调。
+
+**3. 使用零拷贝或共享内存传输大帧**
+
+对于 12MB 的帧数据，使用 ROS2 的 loaned message 或共享内存（Cyclone DDS 的 SHM），避免在 DDS 层做 UDP 分片/序列化。
+
+**4. 降低 QoS 要求**
+
+将 publisher 的 QoS 从 `reliable()` 改为 `best_effort()`，并降低 history depth：
+```cpp
+auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+```
+
+**5. 增大 detector 帧队列或做跳帧处理**
+
+当前队列是 `FrameQueue<Frame> g_frame_queue{10}`，容量太小。在 detector 中做智能跳帧（只处理最新帧）可以减轻压力。
+
+---
+
+**总结：问题确实是 backend 实现问题，核心是 ROS2 DDS reliable QoS + 12MB 大帧 + 30fps 的组合导致传输层全局拥塞，进而使所有 service 调用延迟同步增长直至超时。**

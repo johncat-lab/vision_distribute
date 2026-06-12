@@ -2,11 +2,11 @@
 #include "rpc/publisher.h"
 #include "rpc/subscriber.h"
 #include "rpc/service.h"
+#include "logger/logger.h"
 #include <zmq.hpp>
 #include <string>
 #include <memory>
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 #include <vector>
 #include <map>
@@ -26,14 +26,14 @@ inline size_t simpleHash(const std::string& s) {
     return h;
 }
 
-// Compute port for a pub/sub topic
+// Compute port for a pub/sub topic (base_port ~ base_port + 9)
 inline uint16_t computeTopicPort(const std::string& topic, uint16_t base_port) {
     return base_port + static_cast<uint16_t>(simpleHash(topic) % 10);
 }
 
-// Compute port for a service endpoint
-inline uint16_t computeServicePort(const std::string& endpoint, uint16_t base_port) {
-    return base_port + 10 + static_cast<uint16_t>(simpleHash(endpoint) % 100);
+// Compute port for a service (base_port + 10 ~ base_port + 109)
+inline uint16_t computeServicePort(const std::string& service_name, uint16_t base_port) {
+    return base_port + 10 + static_cast<uint16_t>(simpleHash(service_name) % 100);
 }
 
 // ========== ZeroMQ Publisher ==========
@@ -62,7 +62,7 @@ public:
             socket_.send(payload, zmq::send_flags::none);
             return true;
         } catch (const zmq::error_t& e) {
-            std::cerr << "ZMQ publish error: " << e.what() << std::endl;
+            LOG_ERROR("ZMQ publish error: %s", e.what());
             return false;
         }
     }
@@ -144,7 +144,7 @@ private:
                         callback_(msg);
                     }
                 } catch (const std::exception& e) {
-                    std::cerr << "ZmqSubscriber receive error: " << e.what() << std::endl;
+                    LOG_ERROR("ZmqSubscriber receive error: %s", e.what());
                 }
             }
         }
@@ -169,25 +169,28 @@ public:
         stop();
     }
 
+    void preconnect() override {
+        // ZeroMQ 不需要预连接，连接在 call() 时建立
+    }
+
     bool serve(const std::string& endpoint, typename IService<Request, Response>::Handler handler) override {
         std::lock_guard<std::mutex> lock(handlers_mutex_);
         handlers_[endpoint] = handler;
 
-        // 如果服务器还没启动，在 base_port + 10 上启动单个 REP socket
+        // 如果服务器还没启动，根据服务名称计算端口并启动 REP socket
         if (!running_.load()) {
             rep_socket_ = std::make_unique<zmq::socket_t>(context_, zmq::socket_type::rep);
             rep_socket_->set(zmq::sockopt::linger, 0);
-            // 使用固定端口作为服务端口（所有 endpoint 共享）
-            uint16_t port = base_port_ + 10;
+            // 使用服务名称计算唯一端口（避免多服务冲突）
+            uint16_t port = computeServicePort(name_, base_port_);
             std::string addr = "tcp://*:" + std::to_string(port);
 
-            std::cerr << "[ZmqService::serve] " << name_ << " binding REP on " << addr
-                      << " (endpoint=" << endpoint << ")" << std::endl;
+            LOG_INFO("[ZmqService::serve] %s binding REP on %s (endpoint=%s)", name_.c_str(), addr.c_str(), endpoint.c_str());
 
             try {
                 rep_socket_->bind(addr);
             } catch (const zmq::error_t& e) {
-                std::cerr << "ZmqService bind failed on " << addr << ": " << e.what() << std::endl;
+                LOG_ERROR("ZmqService bind failed on %s: %s", addr.c_str(), e.what());
                 rep_socket_.reset();
                 return false;
             }
@@ -195,8 +198,7 @@ public:
             running_.store(true);
             thread_ = std::thread(&ZmqService::serveLoop, this);
         } else {
-            std::cerr << "[ZmqService::serve] " << name_
-                      << " handler registered: " << endpoint << std::endl;
+            LOG_INFO("[ZmqService::serve] %s handler registered: %s", name_.c_str(), endpoint.c_str());
         }
         return true;
     }
@@ -204,18 +206,16 @@ public:
     Response call(const std::string& endpoint, const Request& req) override {
         zmq::socket_t socket(context_, zmq::socket_type::req);
         socket.set(zmq::sockopt::linger, 0);
-        // 连接到服务端的固定端口
-        uint16_t port = base_port_ + 10;
+        // 使用服务名称计算端口（与服务端保持一致）
+        uint16_t port = computeServicePort(name_, base_port_);
         std::string addr = "tcp://localhost:" + std::to_string(port);
 
-        std::cerr << "[ZmqService::call] " << name_ << "/" << endpoint
-                  << " base_port=" << base_port_ << " port=" << port
-                  << " addr=" << addr << std::endl;
+        LOG_DEBUG("[ZmqService::call] %s/%s base_port=%d port=%d addr=%s", name_.c_str(), endpoint.c_str(), base_port_, port, addr.c_str());
 
         try {
             socket.connect(addr);
         } catch (const zmq::error_t& e) {
-            std::cerr << "[ZmqService::call] CONNECT FAILED: " << e.what() << std::endl;
+            LOG_ERROR("[ZmqService::call] CONNECT FAILED: %s", e.what());
             throw std::runtime_error("ZmqService call connect failed to " + addr + ": " + e.what());
         }
 
@@ -240,12 +240,12 @@ public:
         try {
             zmq::poll(items, 1, std::chrono::milliseconds(5000));
         } catch (const zmq::error_t& e) {
-            std::cerr << "[ZmqService::call] POLL ERROR: " << e.what() << std::endl;
+            LOG_ERROR("[ZmqService::call] POLL ERROR: %s", e.what());
             throw std::runtime_error("ZmqService call poll error: " + std::string(e.what()));
         }
 
         if (!(items[0].revents & ZMQ_POLLIN)) {
-            std::cerr << "[ZmqService::call] TIMEOUT after 5s for endpoint=" << endpoint << std::endl;
+            LOG_ERROR("[ZmqService::call] TIMEOUT after 5s for endpoint=%s", endpoint.c_str());
             throw std::runtime_error("ZmqService call timeout: " + endpoint);
         }
 
@@ -305,8 +305,7 @@ private:
                         if (it != handlers_.end()) {
                             handler = it->second;
                         } else {
-                            std::cerr << "[ZmqService::serveLoop] unknown endpoint: "
-                                      << req.endpoint << std::endl;
+                            LOG_WARN("[ZmqService::serveLoop] unknown endpoint: %s", req.endpoint.c_str());
                             Response resp;
                             resp.success = false;
                             resp.data = "unknown endpoint: " + req.endpoint;
@@ -323,7 +322,7 @@ private:
                     zmq::message_t response_msg(resp_str.data(), resp_str.size());
                     rep_socket_->send(response_msg, zmq::send_flags::none);
                 } catch (const std::exception& e) {
-                    std::cerr << "ZmqService serve error: " << e.what() << std::endl;
+                    LOG_ERROR("ZmqService serve error: %s", e.what());
                 }
             }
         }

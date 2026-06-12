@@ -1,4 +1,5 @@
 #include "ros2_backend.h"
+#include "logger/logger.h"
 
 #ifdef HAS_ROS2
 #include <rclcpp/rclcpp.hpp>
@@ -7,7 +8,6 @@
 #include <atomic>
 #include <mutex>
 #include <stdexcept>
-#include <iostream>
 #include <chrono>
 
 namespace ros2_global {
@@ -19,7 +19,7 @@ static std::atomic<bool> g_running{false};
 static std::mutex g_init_mutex;
 static bool g_initialized = false;
 
-void init(const std::string& node_name) {
+void init(const std::string& node_name, int executor_threads) {
     std::lock_guard<std::mutex> lock(g_init_mutex);
     if (g_initialized) return;
 
@@ -31,24 +31,30 @@ void init(const std::string& node_name) {
     options.use_intra_process_comms(false);
     g_node = std::make_shared<rclcpp::Node>(node_name, options);
 
+    int threads = (executor_threads > 0) ? executor_threads : 4;
     g_executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(
-        rclcpp::ExecutorOptions{}, 2);
+        rclcpp::ExecutorOptions{}, threads);
     g_executor->add_node(g_node);
 
+    g_initialized = true;
+    LOG_INFO("[ROS2] 节点 '%s' 已初始化, executor 线程数=%d", node_name.c_str(), threads);
+}
+
+void start_executor() {
+    std::lock_guard<std::mutex> lock(g_init_mutex);
+    if (!g_initialized) return;
+    if (g_running.load()) return;
+
     g_running.store(true);
+    LOG_INFO("[ROS2] 启动 executor 线程...");
     g_spin_thread = std::thread([]() {
-        std::cerr << "[ROS2] spin thread started, tid="
-                  << std::this_thread::get_id() << std::endl;
-        try {
-            g_executor->spin();
-        } catch (const std::exception& e) {
-            std::cerr << "[ROS2] executor spin error: " << e.what() << std::endl;
-        }
-        std::cerr << "[ROS2] spin thread exited" << std::endl;
+        LOG_DEBUG("[ROS2] executor 线程已启动，开始 spin...");
+        g_executor->spin();
+        LOG_DEBUG("[ROS2] executor spin 结束");
     });
 
-    g_initialized = true;
-    std::cout << "[ROS2] 节点 '" << node_name << "' 已初始化" << std::endl;
+    // 等待 executor 线程启动
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
 void shutdown() {
@@ -73,7 +79,7 @@ void shutdown() {
         rclcpp::shutdown();
     }
 
-    std::cout << "[ROS2] 节点已关闭" << std::endl;
+    LOG_INFO("[ROS2] 节点已关闭");
 }
 
 rclcpp::Node* getNode() {

@@ -2,6 +2,7 @@
 #include "rpc/publisher.h"
 #include "rpc/subscriber.h"
 #include "rpc/service.h"
+#include "logger/logger.h"
 #include <string>
 #include <stdexcept>
 #include <memory>
@@ -10,7 +11,6 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
-#include <iostream>
 #include <cstring>
 
 #ifdef HAS_ZENOH
@@ -60,12 +60,12 @@ public:
             if (z_put(s, z_keyexpr_loan(&keyexpr_),
                       reinterpret_cast<const uint8_t*>(payload.data()),
                       payload.size(), &opts) != Z_OK) {
-                std::cerr << "Zenoh publish error on '" << topic_ << "'" << std::endl;
+                LOG_ERROR("Zenoh publish error on '%s'", topic_.c_str());
                 return false;
             }
             return true;
         } catch (const std::exception& e) {
-            std::cerr << "Zenoh publish exception on '" << topic_ << "': " << e.what() << std::endl;
+            LOG_ERROR("Zenoh publish exception on '%s': %s", topic_.c_str(), e.what());
             return false;
         }
     }
@@ -134,8 +134,7 @@ private:
             T msg = T::deserialize(payload);
             self->callback_(msg);
         } catch (const std::exception& e) {
-            std::cerr << "Zenoh subscriber deserialize error on '"
-                      << self->topic_ << "': " << e.what() << std::endl;
+            LOG_ERROR("Zenoh subscriber deserialize error on '%s': %s", self->topic_.c_str(), e.what());
         }
     }
 
@@ -177,7 +176,7 @@ public:
         std::string ke_str = name_;
         z_view_keyexpr_t ke_view;
         if (z_view_keyexpr_from_string(&ke_view, ke_str.c_str()) != Z_OK) {
-            std::cerr << "ZenohService: invalid keyexpr '" << ke_str << "'" << std::endl;
+            LOG_ERROR("ZenohService: invalid keyexpr '%s'", ke_str.c_str());
             return false;
         }
         z_declare_keyexpr(s, &serve_keyexpr_,
@@ -193,8 +192,7 @@ public:
         if (z_declare_queryable(s, &queryable_,
                                 z_keyexpr_loan(&serve_keyexpr_),
                                 z_move(closure), &q_opts) != Z_OK) {
-            std::cerr << "ZenohService: failed to declare queryable on '"
-                      << ke_str << "'" << std::endl;
+            LOG_ERROR("ZenohService: failed to declare queryable on '%s'", ke_str.c_str());
             return false;
         }
 
@@ -294,7 +292,7 @@ private:
             // 调用业务 handler
             resp = self->handler_(req);
         } catch (const std::exception& e) {
-            std::cerr << "ZenohService query handler error: " << e.what() << std::endl;
+            LOG_ERROR("ZenohService query handler error: %s", e.what());
             resp = Response();
         }
 
@@ -344,6 +342,9 @@ template<typename Request, typename Response>
 class ZenohService : public IService<Request, Response> {
 public:
     ZenohService(const std::string& name) : name_(name) {}
+    void preconnect() override {
+        // Zenoh 不需要预连接
+    }
     bool serve(const std::string&,
                typename IService<Request, Response>::Handler) override {
         throw std::runtime_error("Zenoh backend not available (compile with -DHAS_ZENOH)");

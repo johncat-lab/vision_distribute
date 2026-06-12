@@ -1,7 +1,7 @@
 #include "edge_gradient_detector.h"
+#include "logger/logger.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <iostream>
 #include <fstream>
 #include <string>
 #include <cmath>
@@ -34,20 +34,20 @@ void EdgeGradientDetector::setAreaRange(double min_area, double max_area) {
 void EdgeGradientDetector::setSegmentMode(const std::string& mode) {
     if (mode == "hsv" || mode == "value" || mode == "gradient") {
         segment_mode_ = mode;
-        std::cout << "[边缘梯度] 分割模式: " << mode << std::endl;
+        LOG_INFO("[边缘梯度] 分割模式: %s", mode.c_str());
     } else {
-        std::cerr << "[边缘梯度] 无效分割模式 '" << mode << "', 使用默认 'hsv'" << std::endl;
+        LOG_WARN("[边缘梯度] 无效分割模式 '%s', 使用默认 'hsv'", mode.c_str());
     }
 }
 
 void EdgeGradientDetector::setVThreshold(int v_threshold) {
     v_threshold_ = v_threshold;
-    std::cout << "[边缘梯度] V 通道阈值: " << v_threshold << std::endl;
+    LOG_INFO("[边缘梯度] V 通道阈值: %d", v_threshold);
 }
 
 void EdgeGradientDetector::setGradientThreshold(int grad_threshold) {
     grad_threshold_ = grad_threshold;
-    std::cout << "[边缘梯度] 梯度阈值: " << grad_threshold << std::endl;
+    LOG_INFO("[边缘梯度] 梯度阈值: %d", grad_threshold);
 }
 
 void EdgeGradientDetector::setRoiYCenter(int y_center) {
@@ -61,17 +61,17 @@ void EdgeGradientDetector::setRoiYMargin(int y_margin) {
 void EdgeGradientDetector::setCannyThresholds(double low, double high) {
     canny_low_ = low;
     canny_high_ = high;
-    std::cout << "[边缘梯度] Canny 阈值: " << low << " / " << high << std::endl;
+    LOG_INFO("[边缘梯度] Canny 阈值: %f / %f", low, high);
 }
 
 void EdgeGradientDetector::setGradientTolerance(double tolerance_rad) {
     gradient_tolerance_ = tolerance_rad;
-    std::cout << "[边缘梯度] 梯度方向容差: " << (tolerance_rad * 180.0 / M_PI) << "°" << std::endl;
+    LOG_INFO("[边缘梯度] 梯度方向容差: %f°", tolerance_rad * 180.0 / M_PI);
 }
 
 void EdgeGradientDetector::setSampleStep(int step) {
     sample_step_ = std::max(1, step);
-    std::cout << "[边缘梯度] 采样间隔: " << sample_step_ << std::endl;
+    LOG_INFO("[边缘梯度] 采样间隔: %d", sample_step_);
 }
 
 bool EdgeGradientDetector::init() {
@@ -83,22 +83,19 @@ bool EdgeGradientDetector::init() {
     if (!template_gray.empty()) {
         template_width_ = template_gray.cols;
         template_height_ = template_gray.rows;
-        std::cout << "[边缘梯度] 灰度模版已加载: " << gray_path
-                  << " (" << template_width_ << "x" << template_height_ << ")" << std::endl;
+        LOG_INFO("[边缘梯度] 灰度模版已加载: %s (%dx%d)", gray_path.c_str(), template_width_, template_height_);
     } else {
         std::string tmpl_path = template_dir_ + "/template.png";
         cv::Mat tmpl_color = cv::imread(tmpl_path, cv::IMREAD_COLOR);
         if (tmpl_color.empty()) {
-            std::cerr << "[边缘梯度] 无法加载模版图片: " << tmpl_path << std::endl;
+            LOG_ERROR("[边缘梯度] 无法加载模版图片: %s", tmpl_path.c_str());
             return false;
         }
         cv::cvtColor(tmpl_color, template_gray, cv::COLOR_BGR2GRAY);
         template_width_ = tmpl_color.cols;
         template_height_ = tmpl_color.rows;
-        // 保存彩色版本用于标注
         template_img_ = tmpl_color;
-        std::cout << "[边缘梯度] 彩色模版已加载(转灰度): " << tmpl_path
-                  << " (" << template_width_ << "x" << template_height_ << ")" << std::endl;
+        LOG_INFO("[边缘梯度] 彩色模版已加载(转灰度): %s (%dx%d)", tmpl_path.c_str(), template_width_, template_height_);
     }
 
     if (template_img_.empty()) {
@@ -106,27 +103,23 @@ bool EdgeGradientDetector::init() {
     }
 
     if (initial_angle_offset_ != 0.0) {
-        std::cout << "[边缘梯度] 初始角度偏移: " << initial_angle_offset_ << "°" << std::endl;
+        LOG_INFO("[边缘梯度] 初始角度偏移: %f°", initial_angle_offset_);
     }
 
-    // 尝试加载前景 mask (用于限制边缘提取区域)
     std::string mask_path = template_dir_ + "/template_mask.png";
     cv::Mat template_mask = cv::imread(mask_path, cv::IMREAD_GRAYSCALE);
     if (!template_mask.empty()) {
         cv::threshold(template_mask, template_mask, 128, 255, cv::THRESH_BINARY);
         double mask_ratio = cv::countNonZero(template_mask) / (double)(template_mask.rows * template_mask.cols);
-        std::cout << "[边缘梯度] 前景 mask 已加载: " << mask_path
-                  << " (前景 " << (mask_ratio * 100) << "%%)" << std::endl;
-        // 将 mask 外区域置为均匀背景, 避免提取到背景边缘
+        LOG_INFO("[边缘梯度] 前景 mask 已加载: %s (前景 %.1f%%)", mask_path.c_str(), mask_ratio * 100);
         cv::Scalar bg_mean = cv::mean(template_gray, template_mask);
         template_gray.setTo(bg_mean, ~template_mask);
     } else {
-        std::cout << "[边缘梯度] 未找到前景 mask, 使用全图边缘" << std::endl;
+        LOG_INFO("[边缘梯度] 未找到前景 mask, 使用全图边缘");
     }
 
-    // 提取模板边缘点集
     if (!extractTemplateEdges(template_gray)) {
-        std::cerr << "[边缘梯度] 模板边缘提取失败" << std::endl;
+        LOG_ERROR("[边缘梯度] 模板边缘提取失败");
         return false;
     }
 
@@ -139,8 +132,7 @@ bool EdgeGradientDetector::init() {
     morph_kernel_small_ = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
 
     if (roi_y_center_ >= 0 && roi_y_margin_ > 0) {
-        std::cout << "[边缘梯度] ROI Y中心: " << roi_y_center_
-                  << " 边距: " << roi_y_margin_ << std::endl;
+        LOG_INFO("[边缘梯度] ROI Y中心: %d 边距: %d", roi_y_center_, roi_y_margin_);
     }
 
     ready_ = true;
@@ -186,13 +178,11 @@ bool EdgeGradientDetector::extractTemplateEdges(const cv::Mat& template_gray) {
     template_edge_count_ = static_cast<int>(template_edges_.size());
 
     if (template_edge_count_ < 10) {
-        std::cerr << "[边缘梯度] 模板边缘点过少: " << template_edge_count_
-                  << ", 请调整 Canny 阈值" << std::endl;
+        LOG_ERROR("[边缘梯度] 模板边缘点过少: %d, 请调整 Canny 阈值", template_edge_count_);
         return false;
     }
 
-    std::cout << "[边缘梯度] 模板边缘点数: " << template_edge_count_
-              << " (采样间隔=" << sample_step_ << ")" << std::endl;
+    LOG_INFO("[边缘梯度] 模板边缘点数: %d (采样间隔=%d)", template_edge_count_, sample_step_);
 
     return true;
 }
@@ -283,8 +273,7 @@ std::vector<cv::Rect> EdgeGradientDetector::findCandidateRegions(const cv::Mat& 
             }
         }
 
-        std::cout << "[边缘梯度] value 模式: V>" << v_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
+        LOG_DEBUG("[边缘梯度] value 模式: V>%d 找到 %d 个候选区域", v_threshold_, regions.size());
         return regions;
     }
 
@@ -333,8 +322,7 @@ std::vector<cv::Rect> EdgeGradientDetector::findCandidateRegions(const cv::Mat& 
             }
         }
 
-        std::cout << "[边缘梯度] gradient 模式: grad>" << grad_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
+        LOG_DEBUG("[边缘梯度] gradient 模式: grad>%d 找到 %d 个候选区域", grad_threshold_, regions.size());
         return regions;
     }
 
@@ -350,8 +338,7 @@ std::vector<cv::Rect> EdgeGradientDetector::findCandidateRegions(const cv::Mat& 
 
     double green_ratio = static_cast<double>(cv::countNonZero(green_mask)) / green_mask.total();
     if (green_ratio < 0.05) {
-        std::cerr << "[边缘梯度] 警告: 绿色背景占比仅 " << (green_ratio * 100)
-                  << "%! 建议使用 --segment-mode value" << std::endl;
+        LOG_WARN("[边缘梯度] 警告: 绿色背景占比仅 %.1f%%! 建议使用 --segment-mode value", green_ratio * 100);
     }
 
     cv::Mat product_mask;
@@ -425,8 +412,7 @@ std::vector<cv::Rect> EdgeGradientDetector::findCandidateRegionsGray(const cv::M
             }
         }
 
-        std::cout << "[边缘梯度] value 模式: V>" << v_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
+        LOG_DEBUG("[边缘梯度] value 模式: V>%d 找到 %d 个候选区域", v_threshold_, regions.size());
         return regions;
     }
 
@@ -472,8 +458,7 @@ std::vector<cv::Rect> EdgeGradientDetector::findCandidateRegionsGray(const cv::M
             }
         }
 
-        std::cout << "[边缘梯度] gradient 模式: grad>" << grad_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
+        LOG_DEBUG("[边缘梯度] gradient 模式: grad>%d 找到 %d 个候选区域", grad_threshold_, regions.size());
         return regions;
     }
 
@@ -1066,9 +1051,8 @@ ObjectInfoList EdgeGradientDetector::detect(const Frame& frame) {
     if (candidates.empty()) {
         auto t_total_end = std::chrono::high_resolution_clock::now();
         double total_ms = std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count();
-        std::cout << "[边缘梯度] 检测耗时: 总计=" << total_ms << "ms "
-                  << "(分割=" << seg_ms << "ms, 匹配=0ms, NMS=0ms) "
-                  << "候选=0 匹配=0" << std::endl;
+        LOG_DEBUG("[边缘梯度] 检测耗时: 总计=%.1fms (分割=%.1fms, 匹配=0ms, NMS=0ms) 候选=0 匹配=0", 
+                  total_ms, seg_ms);
         last_results_.clear();
         return result;
     }
@@ -1124,8 +1108,8 @@ ObjectInfoList EdgeGradientDetector::detect(const Frame& frame) {
 
     // 4. 低分回退: 全图粗搜
     if (last_best_score_ < match_threshold_ && last_best_score_ > 0.0) {
-        std::cout << "[边缘梯度] 候选区域最高分=" << last_best_score_
-                  << " < " << match_threshold_ << ", 启动全图回退搜索..." << std::endl;
+        LOG_DEBUG("[边缘梯度] 候选区域最高分=%.4f < %.4f, 启动全图回退搜索...", 
+                  last_best_score_, match_threshold_);
 
         cv::Rect full_roi(0, 0, img_w, img_h);
         if (roi_y_center_ >= 0 && roi_y_margin_ > 0) {
@@ -1185,15 +1169,11 @@ ObjectInfoList EdgeGradientDetector::detect(const Frame& frame) {
     auto t_total_end = std::chrono::high_resolution_clock::now();
     double total_ms = std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count();
 
-    std::cout << "[边缘梯度] 检测耗时: 总计=" << total_ms << "ms "
-              << "(分割=" << seg_ms << "ms, 匹配=" << match_ms << "ms, NMS=" << nms_ms << "ms) "
-              << "候选=" << candidates.size() << " 匹配=" << final_results.size()
-              << " 最高分=" << last_best_score_ << std::endl;
+    LOG_DEBUG("[边缘梯度] 检测耗时: 总计=%.1fms (分割=%.1fms, 匹配=%.1fms, NMS=%.1fms) 候选=%d 匹配=%d 最高分=%.4f", 
+              total_ms, seg_ms, match_ms, nms_ms, candidates.size(), final_results.size(), last_best_score_);
     for (size_t i = 0; i < final_results.size(); ++i) {
-        std::cout << "[边缘梯度]   #" << i << " x=" << final_results[i].x
-                  << " y=" << final_results[i].y
-                  << " angle=" << final_results[i].angle
-                  << " score=" << final_results[i].score << std::endl;
+        LOG_DEBUG("[边缘梯度]   #%d x=%f y=%f angle=%d score=%.4f", 
+                  i, final_results[i].x, final_results[i].y, final_results[i].angle, final_results[i].score);
     }
 
     return result;

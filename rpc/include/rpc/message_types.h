@@ -162,6 +162,107 @@ struct ServiceRequest {
     }
 };
 
+// ========== 标注消息 ==========
+// 用于分布式绘制检测结果，包含绘制所需的完整信息
+// 二进制序列化格式:
+// [4B: frame_num][8B: timestamp][4B: template_width][4B: template_height][4B: object_count]
+// [每个物体: 8B:x][8B:y][8B:angle][8B:score][4B:type][4B:id]
+struct AnnotationMsg {
+    // ===== 帧信息 =====
+    uint32_t frame_num = 0;        // 对应的帧序号
+    int64_t timestamp = 0;         // 时间戳 (毫秒)
+    
+    // ===== 模板信息 (用于绘制) =====
+    uint32_t template_width = 0;   // 模板宽度
+    uint32_t template_height = 0;  // 模板高度
+    
+    // ===== 物体标注 =====
+    struct ObjectAnnotation {
+        double x = 0.0;            // 中心X坐标 (亚像素精度)
+        double y = 0.0;            // 中心Y坐标 (亚像素精度)
+        double angle = 0.0;        // 旋转角度 (度)
+        double score = 0.0;        // 检测分数 (0-1)
+        int32_t type = 0;          // 物体类型
+        int32_t id = 0;            // 物体ID (用于多目标区分)
+        
+        std::string serialize() const {
+            std::string buffer;
+            buffer.resize(40);
+            char* ptr = &buffer[0];
+            std::memcpy(ptr, &x, 8); ptr += 8;
+            std::memcpy(ptr, &y, 8); ptr += 8;
+            std::memcpy(ptr, &angle, 8); ptr += 8;
+            std::memcpy(ptr, &score, 8); ptr += 8;
+            std::memcpy(ptr, &type, 4); ptr += 4;
+            std::memcpy(ptr, &id, 4);
+            return buffer;
+        }
+        
+        static ObjectAnnotation deserialize(const std::string& data) {
+            ObjectAnnotation obj;
+            if (data.size() < 40) return obj;
+            const char* ptr = data.data();
+            std::memcpy(&obj.x, ptr, 8); ptr += 8;
+            std::memcpy(&obj.y, ptr, 8); ptr += 8;
+            std::memcpy(&obj.angle, ptr, 8); ptr += 8;
+            std::memcpy(&obj.score, ptr, 8); ptr += 8;
+            std::memcpy(&obj.type, ptr, 4); ptr += 4;
+            std::memcpy(&obj.id, ptr, 4);
+            return obj;
+        }
+    };
+    
+    std::vector<ObjectAnnotation> objects;
+    
+    // ===== 序列化 =====
+    static constexpr size_t HEADER_SIZE = 28;
+    
+    std::string serialize() const {
+        uint32_t obj_count = static_cast<uint32_t>(objects.size());
+        size_t obj_data_size = obj_count * 40;
+        std::string buffer;
+        buffer.resize(HEADER_SIZE + obj_data_size);
+        
+        char* ptr = &buffer[0];
+        std::memcpy(ptr, &frame_num, 4); ptr += 4;
+        std::memcpy(ptr, &timestamp, 8); ptr += 8;
+        std::memcpy(ptr, &template_width, 4); ptr += 4;
+        std::memcpy(ptr, &template_height, 4); ptr += 4;
+        std::memcpy(ptr, &obj_count, 4); ptr += 4;
+        
+        for (const auto& obj : objects) {
+            std::string obj_data = obj.serialize();
+            std::memcpy(ptr, obj_data.data(), 40);
+            ptr += 40;
+        }
+        return buffer;
+    }
+    
+    static AnnotationMsg deserialize(const std::string& buffer) {
+        AnnotationMsg msg;
+        if (buffer.size() < HEADER_SIZE) return msg;
+        
+        const char* ptr = buffer.data();
+        std::memcpy(&msg.frame_num, ptr, 4); ptr += 4;
+        std::memcpy(&msg.timestamp, ptr, 8); ptr += 8;
+        std::memcpy(&msg.template_width, ptr, 4); ptr += 4;
+        std::memcpy(&msg.template_height, ptr, 4); ptr += 4;
+        
+        uint32_t obj_count = 0;
+        std::memcpy(&obj_count, ptr, 4); ptr += 4;
+        
+        size_t expected_size = HEADER_SIZE + obj_count * 40;
+        if (buffer.size() < expected_size) return msg;
+        
+        for (uint32_t i = 0; i < obj_count; ++i) {
+            std::string obj_data(ptr, 40);
+            msg.objects.push_back(ObjectAnnotation::deserialize(obj_data));
+            ptr += 40;
+        }
+        return msg;
+    }
+};
+
 // ========== 服务响应 ==========
 // 二进制序列化格式:
 // [1B: success flag][4B: data_length][data_length B: data]

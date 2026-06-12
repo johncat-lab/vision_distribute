@@ -1,5 +1,5 @@
 add_executable(camera_node
-    src/main.cpp
+    main.cpp
     src/hik_camera.cpp
 )
 
@@ -9,9 +9,14 @@ target_include_directories(camera_node PRIVATE
 )
 
 target_link_libraries(camera_node PRIVATE
+    vision_logger
     vision_rpc
     ${HIK_MVCAMERACONTROL_LIB}
     ${OpenCV_LIBS}
 )
+
+if(rclcpp_FOUND)
+    target_link_libraries(camera_node PRIVATE vision_interfaces__rosidl_typesupport_cpp)
+endif()
 
 install(TARGETS camera_node RUNTIME DESTINATION bin)

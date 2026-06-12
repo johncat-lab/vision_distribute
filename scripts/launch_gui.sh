@@ -8,6 +8,9 @@ CONFIG_DIR="${INSTALL_DIR}/config"
 LOG_DIR="${INSTALL_DIR}/log"
 TRANSPORT="zeromq"
 
+# ROS2 运行时 dlopen 需要找到自定义 typesupport 库
+export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
+
 # ===== 检测可用的终端模拟器 =====
 detect_terminal() {
     if command -v gnome-terminal &>/dev/null; then
@@ -21,27 +24,6 @@ detect_terminal() {
     else
         echo "none"
     fi
-}
-
-# 在独立终端窗口中分别启动每个节点
-launch_term() {
-    local title="$1"
-    local script_path="$2"
-    case "$TERMINAL" in
-        gnome-terminal)
-            gnome-terminal --title="$title" -- "$script_path" &
-            ;;
-        konsole)
-            konsole -p tabtitle="$title" -e "$script_path" &
-            ;;
-        xfce4-terminal)
-            xfce4-terminal --title="$title" -e "$script_path" &
-            ;;
-        xterm|none)
-            xterm -title "$title" -e "$script_path" 2>/dev/null || bash "$script_path" &
-            ;;
-    esac
-    sleep 0.4
 }
 
 TERMINAL="$(detect_terminal)"
@@ -101,6 +83,13 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
+# ===== 清理残留进程 =====
+echo "正在清理已有进程..."
+for proc in camera_node detector_node comm_node manager; do
+    pkill -9 -f "${proc}" 2>/dev/null && echo "  已终止: ${proc}" || true
+done
+sleep 0.5
+
 echo "========================================"
 echo "  Vision Distribute - GUI模式启动"
 echo "========================================"
@@ -115,30 +104,40 @@ echo ""
 mkdir -p "${LOG_DIR}"
 LOG_TS=$(date +"%Y%m%d_%H%M%S")
 
-# ROS2 模式下 DDS 发现需要更多时间，延长节点启动间隔
+# ROS2 模式下的特殊配置
 if [ "$TRANSPORT" = "ros2" ]; then
     NODE_DELAY=1.5
     MANAGER_DELAY=3.0
     echo "[ROS2] DDS 发现模式，节点间隔=${NODE_DELAY}s，Manager 额外等待=${MANAGER_DELAY}s"
+    # 设置 ROS2 日志目录到可写位置（避免只读文件系统问题）
+    export ROS_LOG_DIR="${LOG_DIR}"
+    export ROS_HOME="${LOG_DIR}/ros_home"
+    mkdir -p "${ROS_HOME}"
+    echo "[ROS2] 设置日志目录: ${ROS_LOG_DIR}"
     echo ""
 else
     NODE_DELAY=0.5
     MANAGER_DELAY=0
 fi
 
-# ===== 创建节点启动脚本（每个节点独立窗口，stdout+stderr 同时输出到终端和日志文件）=====
+# ===== 创建节点启动脚本（stdout+stderr 同时输出到终端和日志文件）=====
 TMPDIR=$(mktemp -d)
 make_script() {
     local path="$TMPDIR/$1"
     local logfile="$3"
-    cat > "$path" << 'SCRIPTEOF'
+    # 使用非引号的 here-doc 允许变量展开
+    cat > "$path" << SCRIPTEOF
 #!/bin/bash
+# 导出 ROS2 环境变量
+export ROS_LOG_DIR="${LOG_DIR}"
+export ROS_HOME="${LOG_DIR}/ros_home"
+mkdir -p "\$ROS_HOME"
+mkdir -p "$(dirname "$logfile")"
+exec > >(tee -a "${logfile}") 2>&1
+echo "=== \$(date '+%Y-%m-%d %H:%M:%S') 启动 ==="
+$2
+echo; echo "[结束]"; read
 SCRIPTEOF
-    echo "mkdir -p \"$(dirname "$logfile")\"" >> "$path"
-    echo "exec > >(tee -a \"${logfile}\") 2>&1" >> "$path"
-    echo "echo \"=== \$(date '+%Y-%m-%d %H:%M:%S') 启动 ===\"" >> "$path"
-    echo "$2" >> "$path"
-    echo 'echo; echo "[结束]"; read' >> "$path"
     chmod +x "$path"
     echo "$path"
 }
@@ -167,20 +166,55 @@ else
 fi
 MGR_SCRIPT=$(make_script "manager.sh" "$MGR_CMD" "${MGR_LOG}")
 
-echo "[启动] 打开 4 个独立终端窗口..."
+echo "[启动] 打开终端窗口，包含 4 个 Tab 页..."
 echo "  camera       -> ${CAM_LOG}"
 echo "  detector     -> ${DET_LOG}"
 echo "  communication-> ${COMM_LOG}"
 echo "  manager      -> ${MGR_LOG}"
 echo ""
-launch_term "Camera"   "$CAM_SCRIPT"
-launch_term "Detector" "$DET_SCRIPT"
-launch_term "Comm"     "$COMM_SCRIPT"
-launch_term "Manager"  "$MGR_SCRIPT"
+
+# ===== 在单个终端窗口中使用多个 Tab 页启动所有节点 =====
+case "$TERMINAL" in
+    gnome-terminal)
+        # 先创建主窗口
+        gnome-terminal --window --title="VisionDistribute" &
+        sleep 0.3
+        # 逐个添加 tab
+        gnome-terminal --tab --title="Camera" -- bash -c "$CAM_SCRIPT; exec bash" &
+        sleep 0.2
+        gnome-terminal --tab --title="Detector" -- bash -c "$DET_SCRIPT; exec bash" &
+        sleep 0.2
+        gnome-terminal --tab --title="Comm" -- bash -c "$COMM_SCRIPT; exec bash" &
+        sleep 0.2
+        gnome-terminal --tab --title="Manager" -- bash -c "$MGR_SCRIPT; exec bash" &
+        ;;
+    konsole)
+        konsole --new-tab -p tabtitle="Camera" -e "$CAM_SCRIPT" \
+                --new-tab -p tabtitle="Detector" -e "$DET_SCRIPT" \
+                --new-tab -p tabtitle="Comm" -e "$COMM_SCRIPT" \
+                --new-tab -p tabtitle="Manager" -e "$MGR_SCRIPT" &
+        ;;
+    xfce4-terminal)
+        xfce4-terminal --tab --title="Camera" -e "$CAM_SCRIPT" \
+                       --tab --title="Detector" -e "$DET_SCRIPT" \
+                       --tab --title="Comm" -e "$COMM_SCRIPT" \
+                       --tab --title="Manager" -e "$MGR_SCRIPT" &
+        ;;
+    xterm|none)
+        # xterm 不支持 tab，回退到多个窗口模式
+        xterm -title "Camera" -e "$CAM_SCRIPT" 2>/dev/null &
+        sleep 0.4
+        xterm -title "Detector" -e "$DET_SCRIPT" 2>/dev/null &
+        sleep 0.4
+        xterm -title "Comm" -e "$COMM_SCRIPT" 2>/dev/null &
+        sleep 0.4
+        xterm -title "Manager" -e "$MGR_SCRIPT" 2>/dev/null &
+        ;;
+esac
 
 echo ""
-echo "所有节点已在新终端窗口中启动。"
-echo "  窗口: Camera | Detector | Comm | Manager"
+echo "所有节点已在终端 Tab 页中启动。"
+echo "  Tab: Camera | Detector | Comm | Manager"
 echo ""
 echo "按 Ctrl+C 停止所有节点..."
 

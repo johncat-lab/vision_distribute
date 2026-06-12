@@ -4,8 +4,7 @@
 #include "vision_server.h"
 #include "tcp_client.h"
 #include "object_info.h"
-
-#include <iostream>
+#include "logger/logger.h"
 #include <string>
 #include <sstream>
 #include <thread>
@@ -16,6 +15,13 @@
 #include <csignal>
 
 #include <opencv2/core.hpp>
+
+#ifdef HAS_ROS2
+#include "ros2_backend.h"
+#include "vision_interfaces/srv/comm_get_config.hpp"
+#include "vision_interfaces/srv/comm_get_status.hpp"
+#include "vision_interfaces/srv/comm_set_config.hpp"
+#endif
 
 // ========== 全局状态 ==========
 static std::mutex g_comm_mutex;
@@ -38,7 +44,7 @@ static CommConfig loadCommConfig(const std::string& path) {
     CommConfig cfg;
     cv::FileStorage fs(path, cv::FileStorage::READ);
     if (!fs.isOpened()) {
-        std::cerr << "警告: 无法打开通信配置文件: " << path << "，使用默认配置" << std::endl;
+        LOG_WARN("无法打开通信配置文件: %s，使用默认配置", path.c_str());
         return cfg;
     }
 
@@ -56,7 +62,7 @@ static CommConfig loadCommConfig(const std::string& path) {
 static bool saveCommConfig(const std::string& path, const CommConfig& cfg) {
     cv::FileStorage fs(path, cv::FileStorage::WRITE);
     if (!fs.isOpened()) {
-        std::cerr << "错误: 无法写入通信配置文件: " << path << std::endl;
+        LOG_ERROR("无法写入通信配置文件: %s", path.c_str());
         return false;
     }
 
@@ -93,25 +99,24 @@ static void startCommunication(const CommConfig& cfg) {
     }
 
     if (cfg.mode == "server") {
-        std::cout << "启动 Server 模式: " << cfg.host << ":" << cfg.port
-                  << " server_mode=" << cfg.server_mode << std::endl;
+        LOG_INFO("启动 Server 模式: %s:%d server_mode=%d", cfg.host.c_str(), cfg.port, cfg.server_mode);
         g_server = std::make_unique<VisionServer>(cfg.port, intToServerMode(cfg.server_mode), cfg.host);
         if (cfg.server_mode == 3) {
             g_server->setInterval(cfg.interval_ms);
         }
         if (!g_server->start()) {
-            std::cerr << "错误: VisionServer 启动失败" << std::endl;
+            LOG_ERROR("VisionServer 启动失败");
             g_server.reset();
         }
     } else {
-        std::cout << "启动 Client 模式: 连接 " << cfg.host << ":" << cfg.port << std::endl;
+        LOG_INFO("启动 Client 模式: 连接 %s:%d", cfg.host.c_str(), cfg.port);
         g_client = std::make_unique<TcpClient>(cfg.host, cfg.port);
         g_client->enableAutoReconnect(true, 3000);
         g_client->setConnectCallback([](bool connected) {
-            std::cout << "TcpClient 连接状态: " << (connected ? "已连接" : "已断开") << std::endl;
+            LOG_INFO("TcpClient 连接状态: %s", connected ? "已连接" : "已断开");
         });
         if (!g_client->connect()) {
-            std::cerr << "警告: TcpClient 初始连接失败，将自动重连" << std::endl;
+            LOG_WARN("TcpClient 初始连接失败，将自动重连");
         }
     }
 }
@@ -141,12 +146,13 @@ static void sendDetectionResult(const std::string& frame_str) {
     std::lock_guard<std::mutex> lock(g_comm_mutex);
 
     if (g_server) {
-        // Server 模式: 更新结果，由 Server 按模式发送
         g_server->updateResult(frame_str);
+        g_server->broadcast(frame_str);
+        LOG_DEBUG("[通信] 检测结果已广播给所有客户端: %s", frame_str.c_str());
     } else if (g_client) {
-        // Client 模式: 主动发送
         if (g_client->isConnected()) {
             g_client->send(frame_str);
+            LOG_DEBUG("[通信] 检测结果已发送到服务器: %s", frame_str.c_str());
         }
     }
 }
@@ -197,9 +203,9 @@ static void signalHandler(int) {
 }
 
 static void printUsage(const char* prog) {
-    std::cout << "用法: " << prog << " --config <system_config.xml> --comm-config <communication.xml>" << std::endl;
-    std::cout << "  --config       系统配置文件路径 (必需)" << std::endl;
-    std::cout << "  --comm-config  通信配置文件路径 (可选)" << std::endl;
+    LOG_INFO("用法: %s --config <system_config.xml> --comm-config <communication.xml>", prog);
+    LOG_INFO("  --config       系统配置文件路径 (必需)");
+    LOG_INFO("  --comm-config  通信配置文件路径 (可选)");
 }
 
 int main(int argc, char* argv[]) {
@@ -219,18 +225,17 @@ int main(int argc, char* argv[]) {
     }
 
     if (config_path.empty()) {
-        std::cerr << "错误: 未指定系统配置文件" << std::endl;
+        LOG_ERROR("未指定系统配置文件");
         printUsage(argv[0]);
         return 1;
     }
 
-    // 1. 加载系统配置
     NodeConfig config;
     try {
         config = ConfigLoader::loadSystemConfig(config_path);
         config.node_name = "comm_node";
     } catch (const std::exception& e) {
-        std::cerr << "加载系统配置失败: " << e.what() << std::endl;
+        LOG_ERROR("加载系统配置失败: %s", e.what());
         return 1;
     }
 
@@ -240,18 +245,15 @@ int main(int argc, char* argv[]) {
     case TransportType::ZENOH:  transport_name = "Zenoh"; break;
     case TransportType::ROS2:   transport_name = "ROS2"; break;
     }
-    std::cout << "Communication Node 启动，传输方式: " << transport_name << std::endl;
+    LOG_INFO("Communication Node 启动，传输方式: %s", transport_name.c_str());
 
-    // 2. 加载通信配置
     if (!comm_config_path.empty()) {
         g_config = loadCommConfig(comm_config_path);
-        std::cout << "通信配置: mode=" << g_config.mode
-                  << " host=" << g_config.host
-                  << " port=" << g_config.port
-                  << " server_mode=" << g_config.server_mode
-                  << " interval_ms=" << g_config.interval_ms << std::endl;
+        LOG_INFO("通信配置: mode=%s host=%s port=%d server_mode=%d interval_ms=%d", 
+                 g_config.mode.c_str(), g_config.host.c_str(), g_config.port, 
+                 g_config.server_mode, g_config.interval_ms);
     } else {
-        std::cout << "未指定通信配置文件，使用默认配置 (server, 0.0.0.0:7930)" << std::endl;
+        LOG_INFO("未指定通信配置文件，使用默认配置 (server, 0.0.0.0:7930)");
     }
 
     // 3. 创建 NodeFactory
@@ -270,10 +272,74 @@ int main(int argc, char* argv[]) {
     });
 
     // 7. 注册服务端点
-    // comm/set_config - 动态修改配置
+#ifdef HAS_ROS2
+    // 注册原生 ROS2 service 类型映射（双向转换：服务端+客户端）
+    // serve() 会自动创建对应的原生 service，call() 也通过原生 client 调用
+    if (auto* rs = dynamic_cast<Ros2Service<ServiceRequest, ServiceResponse>*>(service.get())) {
+        rs->registerNativeEndpoint<vision_interfaces::srv::CommSetConfig>(
+            "set_config",
+            // 服务端: 原生请求 → ServiceRequest
+            [](auto req) -> ServiceRequest {
+                ServiceRequest sr;
+                sr.payload = req->config_data;
+                return sr;
+            },
+            // 服务端: ServiceResponse → 原生响应
+            [](const ServiceResponse& sr, auto resp) {
+                resp->success = sr.success;
+                resp->message = sr.data;
+            },
+            // 客户端: ServiceRequest → 原生请求
+            [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CommSetConfig::Request> {
+                auto req = std::make_shared<vision_interfaces::srv::CommSetConfig::Request>();
+                req->config_data = sr.payload;
+                return req;
+            },
+            // 客户端: 原生响应 → ServiceResponse
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->message;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CommGetConfig>(
+            "get_config",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse& sr, auto resp) {
+                resp->success = sr.success;
+                resp->config_data = sr.data;
+            },
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetConfig::Request> {
+                return std::make_shared<vision_interfaces::srv::CommGetConfig::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->config_data;
+                return sr;
+            });
+        rs->registerNativeEndpoint<vision_interfaces::srv::CommGetStatus>(
+            "get_status",
+            [](auto) -> ServiceRequest { return ServiceRequest{}; },
+            [](const ServiceResponse& sr, auto resp) {
+                resp->success = sr.success;
+                resp->status_data = sr.data;
+            },
+            [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetStatus::Request> {
+                return std::make_shared<vision_interfaces::srv::CommGetStatus::Request>();
+            },
+            [](auto resp) -> ServiceResponse {
+                ServiceResponse sr;
+                sr.success = resp->success;
+                sr.data = resp->status_data;
+                return sr;
+            });
+    }
+#endif
+
     service->serve("set_config", [&](const ServiceRequest& req) -> ServiceResponse {
         ServiceResponse resp;
-        std::cout << "收到 set_config 请求: " << req.payload << std::endl;
+        LOG_DEBUG("收到 set_config 请求: %s", req.payload.c_str());
 
         CommConfig new_cfg = parseConfigPayload(req.payload, g_config);
 
@@ -323,15 +389,13 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    std::cout << "Communication Node 运行中..." << std::endl;
+    LOG_INFO("Communication Node 运行中...");
 
-    // 9. 主循环
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    // 清理
-    std::cout << "Communication Node 正在关闭..." << std::endl;
+    LOG_INFO("Communication Node 正在关闭...");
     stopCommunication();
 
     return 0;

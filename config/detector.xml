@@ -2,7 +2,7 @@
 <opencv_storage>
 <detector>opencv</detector>
 <template_dir>./template</template_dir>
-<match_threshold>0.85</match_threshold>
+<match_threshold>0.70</match_threshold>
 <segment_mode>value</segment_mode>
 <v_threshold>50</v_threshold>
 <grad_threshold>30</grad_threshold>
@@ -11,4 +11,14 @@
 <model_path></model_path>
 <bg_ref_path></bg_ref_path>
 <verify_with_template>1</verify_with_template>
+<enabled>0</enabled>
+
+<!-- 日志配置 -->
+<log_level>debug</log_level>  <!-- off, debug, info, warn, error -->
+<log_output>both</log_output>
+<log_dir>./logs</log_dir>
+<enable_timestamp>1</enable_timestamp>
+<enable_thread_id>0</enable_thread_id>
+<max_file_size_mb>10</max_file_size_mb>
+<max_files>5</max_files>
 </opencv_storage>

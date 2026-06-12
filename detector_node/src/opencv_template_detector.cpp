@@ -1,7 +1,7 @@
 #include "opencv_template_detector.h"
+#include "logger/logger.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <iostream>
 #include <fstream>
 #include <string>
 #include <cmath>
@@ -34,20 +34,20 @@ void OpenCvTemplateDetector::setAreaRange(double min_area, double max_area) {
 void OpenCvTemplateDetector::setSegmentMode(const std::string& mode) {
     if (mode == "hsv" || mode == "value" || mode == "gradient") {
         segment_mode_ = mode;
-        std::cout << "[模版检测] 分割模式: " << mode << std::endl;
+        LOG_INFO("[模版检测] 分割模式: %s", mode.c_str());
     } else {
-        std::cerr << "[模版检测] 无效分割模式 '" << mode << "', 使用默认 'hsv'" << std::endl;
+        LOG_WARN("[模版检测] 无效分割模式 '%s', 使用默认 'hsv'", mode.c_str());
     }
 }
 
 void OpenCvTemplateDetector::setVThreshold(int v_threshold) {
     v_threshold_ = v_threshold;
-    std::cout << "[模版检测] V 通道阈值: " << v_threshold << std::endl;
+    LOG_INFO("[模版检测] V 通道阈值: %d", v_threshold);
 }
 
 void OpenCvTemplateDetector::setGradientThreshold(int grad_threshold) {
     grad_threshold_ = grad_threshold;
-    std::cout << "[模版检测] 梯度阈值: " << grad_threshold << std::endl;
+    LOG_INFO("[模版检测] 梯度阈值: %d", grad_threshold);
 }
 
 bool OpenCvTemplateDetector::init() {
@@ -59,29 +59,27 @@ bool OpenCvTemplateDetector::init() {
     template_img_ = cv::imread(gray_path, cv::IMREAD_GRAYSCALE);
     if (!template_img_.empty()) {
         use_gray_mode_ = true;
-        std::cout << "[模版检测] 灰度模版已加载: " << gray_path
-                  << " (" << template_img_.cols << "x" << template_img_.rows << ")" << std::endl;
+        LOG_INFO("[模版检测] 灰度模版已加载: %s (%dx%d)", gray_path.c_str(), template_img_.cols, template_img_.rows);
     } else {
         // 回退加载彩色模版
         std::string tmpl_path = template_dir_ + "/template.png";
         template_img_ = cv::imread(tmpl_path, cv::IMREAD_COLOR);
         if (template_img_.empty()) {
-            std::cerr << "[模版检测] 无法加载模版图片: " << tmpl_path << std::endl;
+            LOG_ERROR("[模版检测] 无法加载模版图片: %s", tmpl_path.c_str());
             return false;
         }
         use_gray_mode_ = false;
-        std::cout << "[模版检测] 彩色模版已加载: " << tmpl_path
-                  << " (" << template_img_.cols << "x" << template_img_.rows << ")" << std::endl;
+        LOG_INFO("[模版检测] 彩色模版已加载: %s (%dx%d)", tmpl_path.c_str(), template_img_.cols, template_img_.rows);
     }
 
     if (use_gray_mode_) {
-        std::cout << "[模版检测] 匹配模式: 灰度 (单通道, 高速)" << std::endl;
+        LOG_INFO("[模版检测] 匹配模式: 灰度 (单通道, 高速)");
     } else {
-        std::cout << "[模版检测] 匹配模式: 彩色 (三通道)" << std::endl;
+        LOG_INFO("[模版检测] 匹配模式: 彩色 (三通道)");
     }
 
     if (initial_angle_offset_ != 0.0) {
-        std::cout << "[模版检测] 初始角度偏移: " << initial_angle_offset_ << "°" << std::endl;
+        LOG_INFO("[模版检测] 初始角度偏移: %.1f°", initial_angle_offset_);
     }
 
     // 尝试加载前景 mask (GrabCut 生成)
@@ -91,19 +89,18 @@ bool OpenCvTemplateDetector::init() {
         // 确保 mask 是二值的
         cv::threshold(template_mask_, template_mask_, 128, 255, cv::THRESH_BINARY);
         double mask_ratio = cv::countNonZero(template_mask_) / (double)(template_mask_.rows * template_mask_.cols);
-        std::cout << "[模版检测] 前景 mask 已加载: " << mask_path
-                  << " (前景 " << (mask_ratio * 100) << "%%)" << std::endl;
+        LOG_INFO("[模版检测] 前景 mask 已加载: %s (前景 %.1f%%)", mask_path.c_str(), mask_ratio * 100);
 
         // 用前景均值填充背景像素 → CCOEFF 自动忽略 (T-Tmean≈0)
         cv::Scalar fg_mean = cv::mean(template_img_, template_mask_);
         template_img_.setTo(fg_mean, ~template_mask_);
-        std::cout << "[模版检测] 背景已填充前景均值 (" << fg_mean << ")" << std::endl;
+        LOG_INFO("[模版检测] 背景已填充前景均值");
     } else {
-        std::cout << "[模版检测] 未找到前景 mask, 使用无 mask 模式" << std::endl;
+        LOG_INFO("[模版检测] 未找到前景 mask, 使用无 mask 模式");
     }
 
     // 预计算 360 个旋转版本的模版 (每1°一个)
-    std::cout << "[模版检测] 正在预计算旋转模版 (0-359°)..." << std::endl;
+    LOG_INFO("[模版检测] 正在预计算旋转模版 (0-359°)...");
     rotated_templates_.resize(360);
     rotated_masks_.resize(360);
 
@@ -140,8 +137,7 @@ bool OpenCvTemplateDetector::init() {
         rotated_templates_[angle] = rotated;
     }
 
-    std::cout << "[模版检测] 旋转模版预计算完成 (360个, 尺寸 "
-              << diag << "x" << diag << ")" << std::endl;
+    LOG_INFO("[模版检测] 旋转模版预计算完成 (360个, 尺寸 %dx%d)", diag, diag);
 
     // 预计算 1/4 尺寸旋转模版 (金字塔粗搜索用)
     if (diag >= 64) {
@@ -151,8 +147,7 @@ bool OpenCvTemplateDetector::init() {
             cv::resize(rotated_templates_[angle], rotated_templates_quarter_[angle],
                        cv::Size(quarter_size, quarter_size), 0, 0, cv::INTER_AREA);
         }
-        std::cout << "[模版检测] 金字塔模板已预计算 (1/4尺寸: "
-                  << quarter_size << "x" << quarter_size << ")" << std::endl;
+        LOG_INFO("[模版检测] 金字塔模板已预计算 (1/4尺寸: %dx%d)", quarter_size, quarter_size);
     }
 
     // 预计算 1/2 尺寸旋转模版 (金字塔精搜索用, 大模板时显著加速)
@@ -163,8 +158,7 @@ bool OpenCvTemplateDetector::init() {
             cv::resize(rotated_templates_[angle], rotated_templates_half_[angle],
                        cv::Size(half_size, half_size), 0, 0, cv::INTER_AREA);
         }
-        std::cout << "[模版检测] 金字塔模板已预计算 (1/2尺寸: "
-                  << half_size << "x" << half_size << ")" << std::endl;
+        LOG_INFO("[模版检测] 金字塔模板已预计算 (1/2尺寸: %dx%d)", half_size, half_size);
     }
 
     morph_kernel_ = cv::getStructuringElement(cv::MORPH_RECT,
@@ -250,8 +244,7 @@ std::vector<cv::Rect> OpenCvTemplateDetector::findCandidateRegions(const cv::Mat
             }
         }
 
-        std::cout << "[模版检测] value 模式: V>" << v_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
+        LOG_DEBUG("[模版检测] value 模式: V>%d 找到 %d 个候选区域", v_threshold_, regions.size());
         return regions;
     }
 
@@ -309,8 +302,7 @@ std::vector<cv::Rect> OpenCvTemplateDetector::findCandidateRegions(const cv::Mat
             }
         }
 
-        std::cout << "[模版检测] gradient 模式: grad>" << grad_threshold_
-                  << " 找到 " << regions.size() << " 个候选区域" << std::endl;
+        LOG_DEBUG("[模版检测] gradient 模式: grad>%d 找到 %d 个候选区域", grad_threshold_, regions.size());
         return regions;
     }
 
@@ -329,8 +321,7 @@ std::vector<cv::Rect> OpenCvTemplateDetector::findCandidateRegions(const cv::Mat
     // 检测绿色背景占比，如果太低则发出警告
     double green_ratio = static_cast<double>(cv::countNonZero(green_mask)) / green_mask.total();
     if (green_ratio < 0.05) {
-        std::cerr << "[模版检测] 警告: 绿色背景占比仅 " << (green_ratio * 100)
-                  << "%! 建议使用 --segment-mode value (暗色背景模式)" << std::endl;
+        LOG_WARN("[模版检测] 警告: 绿色背景占比仅 %.1f%%! 建议使用 --segment-mode value (暗色背景模式)", green_ratio * 100);
     }
 
     // 取反 → 非绿色区域 (产品候选)
@@ -696,9 +687,7 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
     if (candidates.empty()) {
         auto t_total_end = std::chrono::high_resolution_clock::now();
         double total_ms = std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count();
-        std::cout << "[模版检测] 检测耗时: 总计=" << total_ms << "ms "
-                  << "(分割=" << seg_ms << "ms, 匹配=0ms, NMS=0ms) "
-                  << "候选=0 匹配=0" << std::endl;
+        LOG_DEBUG("[模版检测] 检测耗时: 总计=%.1fms (分割=%.1fms, 匹配=0ms, NMS=0ms) 候选=0 匹配=0", total_ms, seg_ms);
         last_results_.clear();
         return result;
     }
@@ -744,11 +733,10 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
     }
 
     // 低分回退: 候选区域匹配分数偏低时, 用全图 1/4 缩放 + 5° 步长粗搜 + 1/2 缩放精搜
-    const double fallback_threshold = 0.75;
-    if (last_best_score_ < fallback_threshold && last_best_score_ > 0.0
+    // 使用配置的匹配阈值作为回退触发条件
+    if (last_best_score_ < match_threshold_ && last_best_score_ > 0.0
         && !rotated_templates_quarter_.empty()) {
-        std::cout << "[模版检测] 候选区域最高分=" << last_best_score_
-                  << " < " << fallback_threshold << ", 启动全图回退搜索..." << std::endl;
+        LOG_DEBUG("[模版检测] 候选区域最高分=%.4f < %.4f, 启动全图回退搜索...", last_best_score_, match_threshold_);
 
         const int scale = 4;
         int quarter_tmpl_diag = rotated_templates_quarter_[0].cols;
@@ -836,9 +824,7 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
             }
 
             if (fb_fine_score > last_best_score_) {
-                std::cout << "[模版检测] 全图回退找到更优匹配: 分数=" << fb_fine_score
-                          << " 角度=" << fb_fine_angle
-                          << " 位置=(" << fb_fine_center.x << "," << fb_fine_center.y << ")" << std::endl;
+                LOG_DEBUG("[模版检测] 全图回退找到更优匹配: 分数=%.4f 角度=%d 位置=(%d,%d)", fb_fine_score, fb_fine_angle, fb_fine_center.x, fb_fine_center.y);
                 last_best_score_ = fb_fine_score;
                 if (fb_fine_score >= match_threshold_) {
                     detections.clear();
@@ -891,10 +877,8 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
     auto t_total_end = std::chrono::high_resolution_clock::now();
     double total_ms = std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count();
 
-    std::cout << "[模版检测] 检测耗时: 总计=" << total_ms << "ms "
-              << "(分割=" << seg_ms << "ms, 匹配=" << match_ms << "ms, NMS=" << nms_ms << "ms) "
-              << "候选=" << candidates.size() << " 匹配=" << final_results.size()
-              << " 最高分=" << last_best_score_ << std::endl;
+    LOG_DEBUG("[模版检测] 检测耗时: 总计=%.1fms (分割=%.1fms, 匹配=%.1fms, NMS=%.1fms) 候选=%d 匹配=%d 最高分=%.4f", 
+              total_ms, seg_ms, match_ms, nms_ms, candidates.size(), final_results.size(), last_best_score_);
 
     return result;
 }

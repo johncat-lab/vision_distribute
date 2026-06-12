@@ -6,7 +6,7 @@ INSTALL_DIR="${BUILD_DIR}/install"
 
 # ========== 默认参数 ==========
 BUILD_TYPE="Release"
-BUILD_GUI="OFF"
+BUILD_GUI="ON"
 TARGET=""
 JOBS="$(nproc 2>/dev/null || echo 4)"
 CLEAN_FIRST="false"
@@ -266,6 +266,23 @@ else
             ls -la "${BUILD_DIR}/${TARGET}/${BIN_NAME}" 2>/dev/null
         fi
     fi
+fi
+
+# ========== 安装 template 目录 ==========
+echo ">>> 安装 template 目录..."
+TEMPLATE_SRC="${SCRIPT_DIR}/template"
+TEMPLATE_DST="${INSTALL_DIR}/config/template"
+
+if [[ -d "${TEMPLATE_SRC}" ]]; then
+    echo "    复制 template 目录: ${TEMPLATE_SRC} -> ${TEMPLATE_DST}"
+    mkdir -p "${TEMPLATE_DST}"
+    cp -r "${TEMPLATE_SRC}/"* "${TEMPLATE_DST}/" 2>/dev/null || true
+    echo "    template 目录安装完成。"
+else
+    echo "    警告: template 目录不存在 (${TEMPLATE_SRC})"
+    echo "          detector 将使用默认配置，可能无法正常工作。"
+    mkdir -p "${TEMPLATE_DST}"
+    echo "    创建空 template 目录: ${TEMPLATE_DST}"
 fi
 
 echo ""

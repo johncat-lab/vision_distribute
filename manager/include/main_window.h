@@ -44,6 +44,7 @@ private slots:
     void onDetectorSetGradThreshold();
     void onDetectorGetConfig();
     void onDetectorReloadTemplate();
+    void onDetectorOnOff();
 
     // Comm
     void onCommSetHost();
@@ -61,6 +62,7 @@ private:
     void parseAndApplyCommConfig(const std::string& data);
     void updateImageDisplay(const cv::Mat& mat);
     void overlayDetections(cv::Mat& mat, const DetectionMsg& msg);
+    void overlayAnnotations(cv::Mat& mat, const AnnotationMsg& msg);
     void callService(const std::string& service_name,
                      const std::string& endpoint,
                      const std::string& payload,
@@ -70,6 +72,7 @@ private:
     std::unique_ptr<NodeFactory> factory_;
     std::shared_ptr<ISubscriber<FrameMsg>> frame_sub_;
     std::shared_ptr<ISubscriber<DetectionMsg>> detection_sub_;
+    std::shared_ptr<ISubscriber<AnnotationMsg>> annotation_sub_;
     std::shared_ptr<IService<ServiceRequest, ServiceResponse>> camera_service_;
     std::shared_ptr<IService<ServiceRequest, ServiceResponse>> detector_service_;
     std::shared_ptr<IService<ServiceRequest, ServiceResponse>> comm_service_;
@@ -87,6 +90,10 @@ private:
     DetectionMsg latest_detection_;
     bool detection_updated_ = false;
 
+    QMutex annotation_mutex_;
+    AnnotationMsg latest_annotation_;
+    bool annotation_updated_ = false;
+
     // Camera config panel
     QDoubleSpinBox* spin_exposure_;
     QDoubleSpinBox* spin_gain_;
@@ -101,6 +108,8 @@ private:
     QSpinBox* spin_grad_threshold_;
     QTextEdit* text_detector_info_;
     QPushButton* btn_reload_template_;
+    QPushButton* btn_detector_onoff_;  // 检测器开关按钮
+    bool detector_enabled_ = false;    // 当前检测器状态
 
     // Communication config panel
     QLineEdit* edit_comm_host_;

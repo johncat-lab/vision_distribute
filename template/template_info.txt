@@ -1,0 +1,14 @@
+# Template Info (v2)
+template_width=108
+template_height=107
+roi_x=1848
+roi_y=977
+source_width=4096
+source_height=3000
+initial_angle_offset=270
+rotated_rect_cx=1917.5
+rotated_rect_cy=1062
+rotated_rect_w=108
+rotated_rect_h=107
+rotated_rect_angle=-90
+template_mode=gray

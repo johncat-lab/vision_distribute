@@ -4,7 +4,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 set(SOURCES
-    src/main.cpp
+    main.cpp
     src/main_window.cpp
 )
 set(HEADERS
@@ -14,6 +14,7 @@ set(HEADERS
 qt_add_executable(manager ${SOURCES} ${HEADERS})
 target_include_directories(manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(manager PRIVATE
+    vision_logger
     vision_rpc
     ${OpenCV_LIBS}
     Qt6::Core Qt6::Gui Qt6::Widgets

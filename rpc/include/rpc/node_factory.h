@@ -74,7 +74,8 @@ std::shared_ptr<IService<Req, Resp>> NodeFactory::createService(const std::strin
     case TransportType::ZENOH:
         return std::make_shared<ZenohService<Req, Resp>>(name);
     case TransportType::ROS2:
-        return std::make_shared<Ros2Service<Req, Resp>>(name);
+        return std::make_shared<Ros2Service<Req, Resp>>(name, config_.service_timeout_ms,
+                                                      config_.service_wait_ms, config_.service_max_retries);
     }
     return nullptr;
 }

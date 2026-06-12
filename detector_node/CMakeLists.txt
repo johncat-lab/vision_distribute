@@ -1,5 +1,5 @@
 set(DETECTOR_SOURCES
-    src/main.cpp
+    main.cpp
     src/opencv_template_detector.cpp
     src/conveyor_detector.cpp
     src/edge_gradient_detector.cpp
@@ -19,7 +19,11 @@ target_include_directories(detector_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(detector_node PRIVATE vision_rpc ${OpenCV_LIBS})
+target_link_libraries(detector_node PRIVATE vision_logger vision_rpc ${OpenCV_LIBS})
+
+if(rclcpp_FOUND)
+    target_link_libraries(detector_node PRIVATE vision_interfaces__rosidl_typesupport_cpp)
+endif()
 
 if(USE_ONNX)
     target_compile_definitions(detector_node PRIVATE HAS_ONNX)
