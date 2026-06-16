@@ -1,7 +1,7 @@
 #include "conveyor_detector.h"
-#include "logger/logger.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <iostream>
 #include <fstream>
 #include <string>
 #include <cmath>
@@ -18,28 +18,28 @@ ConveyorDetector::ConveyorDetector(const std::string& template_dir,
 
 void ConveyorDetector::setRoiYCenter(int y_center) {
     roi_y_center_ = y_center;
-    LOG_INFO("[传送带检测] ROI Y中心: %d", y_center);
+    std::cout << "[传送带检测] ROI Y中心: " << y_center << std::endl;
 }
 
 void ConveyorDetector::setRoiYMargin(int y_margin) {
     roi_y_margin_ = y_margin;
-    LOG_INFO("[传送带检测] ROI Y边距: %d", y_margin);
+    std::cout << "[传送带检测] ROI Y边距: " << y_margin << std::endl;
 }
 
 void ConveyorDetector::setBgRefPath(const std::string& path) {
     bg_ref_path_ = path;
-    LOG_INFO("[传送带检测] 背景参考路径: %s", path.c_str());
+    std::cout << "[传送带检测] 背景参考路径: " << path << std::endl;
 }
 
 void ConveyorDetector::setVerifyWithTemplate(bool verify) {
     verify_with_template_ = verify;
-    LOG_INFO("[传送带检测] 模版验证: %s", verify ? "开启" : "关闭");
+    std::cout << "[传送带检测] 模版验证: " << (verify ? "开启" : "关闭") << std::endl;
 }
 
 void ConveyorDetector::setAreaRange(double min_area, double max_area) {
     min_area_ = min_area;
     max_area_ = max_area;
-    LOG_INFO("[传送带检测] 面积范围: [%f, %f]", min_area, max_area);
+    std::cout << "[传送带检测] 面积范围: [" << min_area << ", " << max_area << "]" << std::endl;
 }
 
 bool ConveyorDetector::init() {
@@ -54,17 +54,19 @@ bool ConveyorDetector::init() {
         template_img_ = cv::imread(gray_path, cv::IMREAD_GRAYSCALE);
         if (!template_img_.empty()) {
             use_gray_mode_ = true;
-            LOG_INFO("[传送带检测] 灰度模版已加载: %s (%dx%d)", gray_path.c_str(), template_img_.cols, template_img_.rows);
+            std::cout << "[传送带检测] 灰度模版已加载: " << gray_path
+                      << " (" << template_img_.cols << "x" << template_img_.rows << ")" << std::endl;
         } else {
             std::string tmpl_path = template_dir_ + "/template.png";
             template_img_ = cv::imread(tmpl_path, cv::IMREAD_GRAYSCALE);
             if (template_img_.empty()) {
-                LOG_ERROR("[传送带检测] 无法加载模版图片: %s", tmpl_path.c_str());
-                LOG_WARN("[传送带检测] 将以无模版验证模式运行");
+                std::cerr << "[传送带检测] 无法加载模版图片: " << tmpl_path << std::endl;
+                std::cerr << "[传送带检测] 将以无模版验证模式运行" << std::endl;
                 verify_with_template_ = false;
             } else {
                 use_gray_mode_ = true;
-                LOG_INFO("[传送带检测] 模版已加载(灰度): %s (%dx%d)", tmpl_path.c_str(), template_img_.cols, template_img_.rows);
+                std::cout << "[传送带检测] 模版已加载(灰度): " << tmpl_path
+                          << " (" << template_img_.cols << "x" << template_img_.rows << ")" << std::endl;
             }
         }
 
@@ -75,10 +77,10 @@ bool ConveyorDetector::init() {
                 cv::threshold(template_mask_, template_mask_, 128, 255, cv::THRESH_BINARY);
                 cv::Scalar fg_mean = cv::mean(template_img_, template_mask_);
                 template_img_.setTo(fg_mean, ~template_mask_);
-                LOG_INFO("[传送带检测] 前景 mask 已加载, 背景已填充前景均值 (%f)", fg_mean[0]);
+                std::cout << "[传送带检测] 前景 mask 已加载, 背景已填充前景均值 (" << fg_mean << ")" << std::endl;
             }
 
-            LOG_INFO("[传送带检测] 正在预计算旋转模版 (0-359°)...");
+            std::cout << "[传送带检测] 正在预计算旋转模版 (0-359°)..." << std::endl;
             rotated_templates_.resize(360);
 
             cv::Point2f center(template_img_.cols / 2.0f, template_img_.rows / 2.0f);
@@ -97,7 +99,8 @@ bool ConveyorDetector::init() {
                 rotated_templates_[angle] = rotated;
             }
 
-            LOG_INFO("[传送带检测] 旋转模版预计算完成 (360个, 尺寸 %dx%d)", diag, diag);
+            std::cout << "[传送带检测] 旋转模版预计算完成 (360个, 尺寸 "
+                      << diag << "x" << diag << ")" << std::endl;
         }
     }
 
@@ -106,19 +109,19 @@ bool ConveyorDetector::init() {
 
     ready_ = true;
 
-    LOG_INFO("[传送带检测] 初始化完成");
-    LOG_INFO("[传送带检测] 模版目录: %s", template_dir_.c_str());
-    LOG_INFO("[传送带检测] 匹配阈值: %f", match_threshold_);
-    LOG_INFO("[传送带检测] 差分阈值: %d", diff_threshold_);
-    LOG_INFO("[传送带检测] ROI Y中心: %d", roi_y_center_);
-    LOG_INFO("[传送带检测] ROI Y边距: %d", roi_y_margin_);
-    LOG_INFO("[传送带检测] 背景参考路径: %s", bg_ref_path_.empty() ? "(无)" : bg_ref_path_.c_str());
-    LOG_INFO("[传送带检测] 模版验证: %s", verify_with_template_ ? "开启" : "关闭");
-    LOG_INFO("[传送带检测] 面积范围: [%f, %f]", min_area_, max_area_);
+    std::cout << "[传送带检测] 初始化完成" << std::endl;
+    std::cout << "[传送带检测] 模版目录: " << template_dir_ << std::endl;
+    std::cout << "[传送带检测] 匹配阈值: " << match_threshold_ << std::endl;
+    std::cout << "[传送带检测] 差分阈值: " << diff_threshold_ << std::endl;
+    std::cout << "[传送带检测] ROI Y中心: " << roi_y_center_ << std::endl;
+    std::cout << "[传送带检测] ROI Y边距: " << roi_y_margin_ << std::endl;
+    std::cout << "[传送带检测] 背景参考路径: " << (bg_ref_path_.empty() ? "(无)" : bg_ref_path_) << std::endl;
+    std::cout << "[传送带检测] 模版验证: " << (verify_with_template_ ? "开启" : "关闭") << std::endl;
+    std::cout << "[传送带检测] 面积范围: [" << min_area_ << ", " << max_area_ << "]" << std::endl;
     if (initial_angle_offset_ != 0.0) {
-        LOG_INFO("[传送带检测] 初始角度偏移: %f°", initial_angle_offset_);
+        std::cout << "[传送带检测] 初始角度偏移: " << initial_angle_offset_ << "°" << std::endl;
     }
-    LOG_INFO("[传送带检测] 背景参考: %s", bg_ref_gray_.empty() ? "未加载" : "已加载");
+    std::cout << "[传送带检测] 背景参考: " << (bg_ref_gray_.empty() ? "未加载" : "已加载") << std::endl;
 
     return true;
 }
@@ -158,11 +161,12 @@ cv::Mat ConveyorDetector::frameToGray(const Frame& frame) const {
 bool ConveyorDetector::loadBackgroundRef() {
     cv::Mat bg = cv::imread(bg_ref_path_, cv::IMREAD_GRAYSCALE);
     if (bg.empty()) {
-        LOG_ERROR("[传送带检测] 无法加载背景参考图: %s", bg_ref_path_.c_str());
+        std::cerr << "[传送带检测] 无法加载背景参考图: " << bg_ref_path_ << std::endl;
         return false;
     }
     bg_ref_gray_ = bg;
-    LOG_INFO("[传送带检测] 背景参考图已加载: %s (%dx%d)", bg_ref_path_.c_str(), bg.cols, bg.rows);
+    std::cout << "[传送带检测] 背景参考图已加载: " << bg_ref_path_
+              << " (" << bg.cols << "x" << bg.rows << ")" << std::endl;
     return true;
 }
 
@@ -278,7 +282,7 @@ ObjectInfoList ConveyorDetector::detect(const Frame& frame) {
     if (gray.empty()) return result;
 
     if (bg_ref_gray_.empty()) {
-        LOG_ERROR("[传送带检测] 背景参考图未设置, 请先调用 captureBackground()");
+        std::cerr << "[传送带检测] 背景参考图未设置, 请先调用 captureBackground()" << std::endl;
         return result;
     }
 
@@ -300,8 +304,9 @@ ObjectInfoList ConveyorDetector::detect(const Frame& frame) {
     if (contours.empty()) {
         auto t_total_end = std::chrono::high_resolution_clock::now();
         double total_ms = std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count();
-        LOG_DEBUG("[传送带检测] 检测耗时: 总计=%.1fms (差分=%.1fms, 轮廓=%.1fms, 验证=0ms) 候选=0 匹配=0", 
-                  total_ms, sub_ms, blob_ms);
+        std::cout << "[传送带检测] 检测耗时: 总计=" << total_ms << "ms "
+                  << "(差分=" << sub_ms << "ms, 轮廓=" << blob_ms << "ms, 验证=0ms) "
+                  << "候选=0 匹配=0" << std::endl;
         return result;
     }
 
@@ -366,8 +371,10 @@ ObjectInfoList ConveyorDetector::detect(const Frame& frame) {
     auto t_total_end = std::chrono::high_resolution_clock::now();
     double total_ms = std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count();
 
-    LOG_DEBUG("[传送带检测] 检测耗时: 总计=%.1fms (差分=%.1fms, 轮廓=%.1fms, 验证=%.1fms) 候选=%d 匹配=%d 最高分=%.4f", 
-              total_ms, sub_ms, blob_ms, verify_ms, contours.size(), last_results_.size(), last_best_score_);
+    std::cout << "[传送带检测] 检测耗时: 总计=" << total_ms << "ms "
+              << "(差分=" << sub_ms << "ms, 轮廓=" << blob_ms << "ms, 验证=" << verify_ms << "ms) "
+              << "候选=" << contours.size() << " 匹配=" << last_results_.size()
+              << " 最高分=" << last_best_score_ << std::endl;
 
     return result;
 }
@@ -375,15 +382,16 @@ ObjectInfoList ConveyorDetector::detect(const Frame& frame) {
 void ConveyorDetector::captureBackground(const Frame& frame) {
     cv::Mat gray = frameToGray(frame);
     if (gray.empty()) {
-        LOG_ERROR("[传送带检测] captureBackground: 帧转换失败");
+        std::cerr << "[传送带检测] captureBackground: 帧转换失败" << std::endl;
         return;
     }
     bg_ref_gray_ = gray.clone();
     if (!bg_ref_path_.empty()) {
         cv::imwrite(bg_ref_path_, bg_ref_gray_);
-        LOG_INFO("[传送带检测] 背景参考图已保存: %s", bg_ref_path_.c_str());
+        std::cout << "[传送带检测] 背景参考图已保存: " << bg_ref_path_ << std::endl;
     }
-    LOG_INFO("[传送带检测] 背景参考图已捕获 (%dx%d)", bg_ref_gray_.cols, bg_ref_gray_.rows);
+    std::cout << "[传送带检测] 背景参考图已捕获 ("
+              << bg_ref_gray_.cols << "x" << bg_ref_gray_.rows << ")" << std::endl;
 }
 
 bool ConveyorDetector::hasBackgroundRef() const {

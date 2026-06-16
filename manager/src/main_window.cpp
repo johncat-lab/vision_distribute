@@ -42,8 +42,10 @@
 
 // ========== 构造/析构 ==========
 
-MainWindow::MainWindow(const std::string& config_path, QWidget* parent)
-    : QMainWindow(parent)
+MainWindow::MainWindow(const std::string& config_path,
+                       int argc, char* argv[],
+                       QWidget* parent)
+    : QMainWindow(parent), saved_argc_(argc), saved_argv_(argv)
 {
     setupUI();
     setupRPC(config_path);
@@ -292,9 +294,23 @@ void MainWindow::setupRPC(const std::string& config_path)
     config.node_name = "manager_node";
     factory_ = std::make_unique<NodeFactory>(config);
 
-    frame_sub_     = factory_->createSubscriber<FrameMsg>("vision/frame");
-    detection_sub_ = factory_->createSubscriber<DetectionMsg>("vision/detection");
-    annotation_sub_ = factory_->createSubscriber<AnnotationMsg>("vision/annotation");
+    // DAG 端口管理器
+    edges_ = std::make_unique<NodeEdgeManager>(*factory_, "manager");
+    edges_->setDefaultTopic("frame_input",      "vision/frame");
+    edges_->setDefaultTopic("detection_input",  "vision/detection");
+    edges_->setDefaultTopic("annotation_input", "vision/annotation");
+    // 让 NodeEdgeManager 自己解析 --topic-map 和 --instance
+    if (saved_argv_) {
+        edges_->parseArgs(saved_argc_, saved_argv_);
+    }
+
+    frame_sub_      = edges_->subscribe<FrameMsg>("frame_input", "vision/frame");
+    detection_sub_  = edges_->subscribe<DetectionMsg>("detection_input", "vision/detection");
+    annotation_sub_ = edges_->subscribe<AnnotationMsg>("annotation_input", "vision/annotation");
+    LOG_INFO("[Manager] 订阅 topics: frame=%s, detection=%s, annotation=%s",
+             frame_sub_->getTopic().c_str(),
+             detection_sub_->getTopic().c_str(),
+             annotation_sub_->getTopic().c_str());
 
     camera_service_   = factory_->createService<ServiceRequest, ServiceResponse>("camera");
     detector_service_ = factory_->createService<ServiceRequest, ServiceResponse>("detector");

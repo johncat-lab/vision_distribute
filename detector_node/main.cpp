@@ -1,6 +1,8 @@
 #include "rpc/node_factory.h"
 #include "rpc/config_loader.h"
 #include "rpc/message_types.h"
+#include "rpc/node_manifest.h"
+#include "rpc/edge_manager.h"
 
 #include "detector.h"
 #include "opencv_template_detector.h"
@@ -57,6 +59,20 @@ static void signalHandler(int sig) {
     (void)sig;
     LOG_INFO("收到退出信号，正在关闭...");
     g_running = false;
+}
+
+// ========== 构建 manifest ==========
+static NodeManifest buildManifest() {
+    NodeManifest m;
+    m.name = "detector_node";
+    m.binary = "detector_node";
+    m.version = "1.0";
+    m.config_file = "detector.xml";
+    m.inputs.push_back({"frame_input", "FrameMsg", "来自相机的图像帧"});
+    m.outputs.push_back({"detection_output", "DetectionMsg", "检测结果协议字符串"});
+    m.outputs.push_back({"annotation_output", "AnnotationMsg", "检测结果标注信息"});
+    m.provides_services.push_back({"detector", {"get_result", "get_config", "onoff", "set_threshold", "reload_template"}});
+    return m;
 }
 
 // ========== 命令行用法 ==========
@@ -214,7 +230,10 @@ int main(int argc, char* argv[]) {
     // 解析命令行参数
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--config" && i + 1 < argc) {
+        if (arg == "--describe") {
+            std::cout << buildManifest().toJson() << std::endl;
+            return 0;
+        } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else if (arg == "--detector-config" && i + 1 < argc) {
             detector_config_path = argv[++i];
@@ -295,17 +314,25 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 #endif
 
-    // 创建 NodeFactory
+    // 创建 NodeFactory + EdgeManager
     NodeFactory factory(config);
+    NodeEdgeManager edges(factory, "detector_node");
+    edges.setDefaultTopic("frame_input", "vision/frame");
+    edges.setDefaultTopic("detection_output", "vision/detection");
+    edges.setDefaultTopic("annotation_output", "vision/annotation");
+    edges.parseArgs(argc, argv);
 
-    // 创建帧订阅者 (vision/frame)
-    auto frame_sub = factory.createSubscriber<FrameMsg>("vision/frame");
+    // 创建帧订阅者
+    auto frame_sub = edges.subscribe<FrameMsg>("frame_input", "vision/frame");
+    LOG_INFO("[Detector] 帧订阅者已创建，topic: %s", frame_sub->getTopic().c_str());
 
-    // 创建检测发布者 (vision/detection)
-    g_detection_pub = factory.createPublisher<DetectionMsg>("vision/detection");
+    // 创建检测发布者
+    g_detection_pub = edges.publish<DetectionMsg>("detection_output", "vision/detection");
+    LOG_INFO("[Detector] 检测发布者已创建，topic: %s", g_detection_pub->getTopic().c_str());
 
-    // 创建标注发布者 (vision/annotation) - 用于分布式绘制检测结果
-    g_annotation_pub = factory.createPublisher<AnnotationMsg>("vision/annotation");
+    // 创建标注发布者
+    g_annotation_pub = edges.publish<AnnotationMsg>("annotation_output", "vision/annotation");
+    LOG_INFO("[Detector] 标注发布者已创建，topic: %s", g_annotation_pub->getTopic().c_str());
 
     // 创建服务 (detector/get_result, detector/get_config)
     auto service = factory.createService<ServiceRequest, ServiceResponse>("detector");

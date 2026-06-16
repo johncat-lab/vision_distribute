@@ -19,4 +19,13 @@ target_link_libraries(manager PRIVATE
     ${OpenCV_LIBS}
     Qt6::Core Qt6::Gui Qt6::Widgets
 )
-install(TARGETS manager RUNTIME DESTINATION bin)
+install(TARGETS manager RUNTIME DESTINATION manager)
+
+# 安装 manager 所需的配置文件
+install(FILES
+    ${CMAKE_SOURCE_DIR}/config/system_config.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zeromq.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_ros2.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zenoh.xml
+    DESTINATION manager
+)

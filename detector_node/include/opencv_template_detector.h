@@ -34,8 +34,9 @@ public:
     // 执行模版匹配检测
     ObjectInfoList detect(const Frame& frame) override;
 
-    // 保存带标注的图片
     bool saveAnnotated(const Frame& frame, const std::string& path) override;
+
+    void drawAnnotations(cv::Mat& image) override;
 
     // ===== HSV 分割参数 (可调整) =====
     void setHsvRange(int h_low, int h_high, int s_low, int s_high, int v_low, int v_high);
@@ -46,6 +47,12 @@ public:
     void setSegmentMode(const std::string& mode);
     void setVThreshold(int v_threshold);
     void setGradientThreshold(int grad_threshold);
+
+    void setMatchThreshold(float threshold) { match_threshold_ = threshold; }
+    float getMatchThreshold() const { return match_threshold_; }
+
+    void setRoiYCenter(int y_center);
+    void setRoiYMargin(int y_margin);
 
     // 获取调试信息 (最近一帧的候选区域数、匹配分数)
     int getLastCandidateCount() const { return last_candidate_count_; }
@@ -58,24 +65,28 @@ public:
     // 获取初始角度偏移 (用于反算图像中的视觉角度)
     double getInitialAngleOffset() const { return initial_angle_offset_; }
 
-    // 设置匹配阈值 (运行时动态调整)
-    void setMatchThreshold(float threshold) { match_threshold_ = threshold; }
-
 private:
     // Frame → cv::Mat (BGR)
     cv::Mat frameToBGR(const Frame& frame) const;
 
+    // Frame → cv::Mat (灰度, Mono8 帧直接使用, 否则从 BGR 转换)
+    cv::Mat frameToGray(const Frame& frame) const;
+
     // HSV 颜色分割，获取候选区域 (非绿色区域)
     std::vector<cv::Rect> findCandidateRegions(const cv::Mat& bgr) const;
+
+    // 灰度分割，获取候选区域 (value/gradient 模式, Mono8 直连)
+    std::vector<cv::Rect> findCandidateRegionsGray(const cv::Mat& gray) const;
 
     // 在指定 ROI 内进行多角度模版匹配 (支持灰度或彩色图像)
     // 返回: 最佳匹配分数, 最佳角度, 匹配中心位置 (图像坐标系)
     struct MatchResult {
         double score;
-        int angle;          // 度
-        cv::Point center;   // 匹配中心 (原图坐标)
+        int angle;
+        cv::Point2d center;
     };
     MatchResult matchInRegion(const cv::Mat& image, const cv::Rect& roi, int coarse_step_override = 0) const;
+    std::vector<MatchResult> matchInRegionMulti(const cv::Mat& image, const cv::Rect& roi, int coarse_step_override = 0) const;
 
     // 简单距离 NMS: 去除距离过近的重复检测
     struct DetResult {
@@ -110,6 +121,9 @@ private:
     int v_threshold_ = 50;  // value 模式下的 V 通道阈值
     int grad_threshold_ = 30;  // gradient 模式下的 Sobel 幅值阈值
 
+    int roi_y_center_ = -1;
+    int roi_y_margin_ = -1;
+
     // 灰度匹配模式
     bool use_gray_mode_ = false;
     double initial_angle_offset_ = 0.0;  // 模板初始角度偏移 (度)
@@ -127,7 +141,6 @@ private:
     cv::Mat template_img_;
     cv::Mat template_mask_;                    // 前景 mask (0=背景, 255=产品)
 
-    // 原始模版
     // 最近一次检测结果 (供 saveAnnotated 使用)
     std::vector<DetResult> last_results_;
 

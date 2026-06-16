@@ -13,17 +13,22 @@
 #include <QMutex>
 
 #include <atomic>
+#include <map>
 
 #include <opencv2/core.hpp>
 
 #include "rpc/node_factory.h"
 #include "rpc/message_types.h"
+#include "rpc/edge_manager.h"
+#include "rpc/node_manifest.h"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(const std::string& config_path, QWidget* parent = nullptr);
+    explicit MainWindow(const std::string& config_path,
+                        int argc = 0, char* argv[] = nullptr,
+                        QWidget* parent = nullptr);
     ~MainWindow() override;
 
 private slots:
@@ -70,6 +75,7 @@ private:
 
     // RPC components
     std::unique_ptr<NodeFactory> factory_;
+    std::unique_ptr<NodeEdgeManager> edges_;  // DAG 端口管理器
     std::shared_ptr<ISubscriber<FrameMsg>> frame_sub_;
     std::shared_ptr<ISubscriber<DetectionMsg>> detection_sub_;
     std::shared_ptr<ISubscriber<AnnotationMsg>> annotation_sub_;
@@ -136,4 +142,9 @@ private:
     std::atomic<bool> camera_call_pending_{false};
     std::atomic<bool> detector_call_pending_{false};
     std::atomic<bool> comm_call_pending_{false};
+
+    // DAG 参数
+    std::string instance_name_ = "manager";
+    int saved_argc_ = 0;
+    char** saved_argv_ = nullptr;
 };

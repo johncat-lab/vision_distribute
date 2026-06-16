@@ -1,11 +1,14 @@
 #include "rpc/node_factory.h"
 #include "rpc/config_loader.h"
 #include "rpc/message_types.h"
+#include "rpc/node_manifest.h"
+#include "rpc/edge_manager.h"
 #include "vision_server.h"
 #include "tcp_client.h"
 #include "object_info.h"
 #include "logger/logger.h"
 #include <string>
+#include <iostream>
 #include <sstream>
 #include <thread>
 #include <chrono>
@@ -208,13 +211,28 @@ static void printUsage(const char* prog) {
     LOG_INFO("  --comm-config  通信配置文件路径 (可选)");
 }
 
+// ========== 构建 manifest ==========
+static NodeManifest buildManifest() {
+    NodeManifest m;
+    m.name = "comm_node";
+    m.binary = "comm_node";
+    m.version = "1.0";
+    m.config_file = "communication.xml";
+    m.inputs.push_back({"detection_input", "DetectionMsg", "来自检测器的检测结果"});
+    m.provides_services.push_back({"comm", {"set_config", "get_config", "get_status"}});
+    return m;
+}
+
 int main(int argc, char* argv[]) {
     std::string config_path;
     std::string comm_config_path;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--config" && i + 1 < argc) {
+        if (arg == "--describe") {
+            std::cout << buildManifest().toJson() << std::endl;
+            return 0;
+        } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else if (arg == "--comm-config" && i + 1 < argc) {
             comm_config_path = argv[++i];
@@ -256,11 +274,15 @@ int main(int argc, char* argv[]) {
         LOG_INFO("未指定通信配置文件，使用默认配置 (server, 0.0.0.0:7930)");
     }
 
-    // 3. 创建 NodeFactory
+    // 3. 创建 NodeFactory + EdgeManager
     NodeFactory factory(config);
+    NodeEdgeManager edges(factory, "comm_node");
+    edges.setDefaultTopic("detection_input", "vision/detection");
+    edges.parseArgs(argc, argv);
 
     // 4. 创建检测消息订阅者
-    auto detection_sub = factory.createSubscriber<DetectionMsg>("vision/detection");
+    auto detection_sub = edges.subscribe<DetectionMsg>("detection_input", "vision/detection");
+    LOG_INFO("[CommNode] 检测订阅者已创建，topic: %s", detection_sub->getTopic().c_str());
 
     // 5. 创建服务端
     auto service = factory.createService<ServiceRequest, ServiceResponse>("comm");

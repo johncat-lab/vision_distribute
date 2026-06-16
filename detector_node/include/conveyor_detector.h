@@ -37,6 +37,12 @@ public:
     double getLastBestScore() const { return last_best_score_; }
     int getTemplateWidth() const { return template_img_.cols; }
     int getTemplateHeight() const { return template_img_.rows; }
+    double getInitialAngleOffset() const { return initial_angle_offset_; }
+    const std::vector<std::vector<cv::Point>>& getLastContours() const { return last_contours_; }
+
+    // ===== 背景参考 =====
+    void captureBackground(const Frame& frame);
+    bool hasBackgroundRef() const;
 
 private:
     // ===== 内部结构 =====
@@ -77,10 +83,6 @@ private:
 
     // 加载背景参考
     bool loadBackgroundRef();
-    bool hasBackgroundRef() const;
-
-    // 拍摄背景参考帧
-    void captureBackground(const Frame& frame);
 
     // 加载模版元信息
     bool loadTemplateInfo();
@@ -91,11 +93,11 @@ private:
     int angle_step_fine_;
 
     // 帧差法参数
-    int diff_threshold_ = 30;
+    int diff_threshold_ = 25;
 
     // ROI 参数
     int roi_y_center_ = -1;
-    int roi_y_margin_ = 0;
+    int roi_y_margin_ = -1;
 
     // 面积范围
     double min_area_ = 2000.0;
@@ -109,7 +111,7 @@ private:
     bool verify_with_template_ = true;
 
     // 灰度匹配
-    bool use_gray_mode_ = true;
+    bool use_gray_mode_ = false;
     double initial_angle_offset_ = 0.0;
 
     // 预计算旋转模版

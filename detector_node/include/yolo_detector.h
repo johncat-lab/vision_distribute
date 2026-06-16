@@ -10,14 +10,17 @@
 #include "detector.h"
 
 // YOLOv11-OBB 检测器
-// 使用 ONNX Runtime 加载模型，执行推理
+// 支持 ONNX Runtime 和 NCNN 两种推理后端
 class YoloDetector : public Detector {
 public:
+    enum class Backend { ONNX, NCNN };
+
     YoloDetector(const std::string& model_path,
                  float conf_threshold = 0.5f,
-                 float nms_threshold = 0.45f,
+                 float nms_threshold = 0.3f,
                  int input_width = 640,
-                 int input_height = 640);
+                 int input_height = 640,
+                 Backend backend = Backend::ONNX);
     ~YoloDetector();
 
     // 禁止拷贝
@@ -34,10 +37,9 @@ public:
     // 模型是否已加载就绪
     bool isReady() const override;
 
-    // 将最近一次 detect() 的检测结果绘制到 frame 图像上
-    // 输出 24bit BMP 文件，内容: 红色旋转矩形框 + 文本 "#i x=.. y=.. a=.. t=.."
-    // 返回 true 表示保存成功
     bool saveAnnotated(const Frame& frame, const std::string& path) override;
+
+    void drawAnnotations(cv::Mat& image) override;
 
 private:
     // ===== 预处理 =====
@@ -70,6 +72,12 @@ private:
     void bilinearResize(const unsigned char* src, int src_w, int src_h, int src_channels,
                         unsigned char* dst, int dst_w, int dst_h);
 
+    // ===== NCNN 后端 =====
+    bool initNcnn();
+    ObjectInfoList detectWithNcnn(const std::vector<float>& input_tensor,
+                                  float scale, int pad_x, int pad_y,
+                                  int orig_width, int orig_height);
+
     std::string model_path_;
     float conf_threshold_;
     float nms_threshold_;
@@ -80,6 +88,11 @@ private:
     struct OrtSession;
     OrtSession* session_ = nullptr;
 
+    // NCNN 内部状态 (使用 pImpl 避免头文件暴露 NCNN)
+    struct NcnnSession;
+    NcnnSession* ncnn_session_ = nullptr;
+
+    Backend backend_;
     std::atomic<bool> ready_{false};
 };
 

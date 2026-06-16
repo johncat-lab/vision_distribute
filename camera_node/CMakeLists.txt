@@ -19,4 +19,14 @@ if(rclcpp_FOUND)
     target_link_libraries(camera_node PRIVATE vision_interfaces__rosidl_typesupport_cpp)
 endif()
 
-install(TARGETS camera_node RUNTIME DESTINATION bin)
+install(TARGETS camera_node RUNTIME DESTINATION camera_node)
+
+# 安装 camera_node 所需的配置文件
+install(FILES
+    ${CMAKE_SOURCE_DIR}/config/camera_config.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zeromq.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_ros2.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zenoh.xml
+    DESTINATION camera_node
+)

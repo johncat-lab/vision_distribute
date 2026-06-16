@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<pipeline>
+
+<templates>
+  <template name="image_publisher_node">
+    <binary>image_publisher_node</binary>
+    <out port="frame_output" type="FrameMsg"/>
+  </template>
+
+  <template name="manager">
+    <binary>manager</binary>
+    <in  port="frame_input"      type="FrameMsg"/>
+    <in  port="detection_input"  type="DetectionMsg"/>
+    <in  port="annotation_input" type="AnnotationMsg"/>
+    <requires_service role="camera"/>
+    <requires_service role="detector"/>
+    <requires_service role="comm"/>
+  </template>
+</templates>
+
+<instances>
+  <instance name="img_pub" template="image_publisher_node">
+    <config>image_publisher_config.xml</config>
+  </instance>
+  <instance name="gui" template="manager">
+    <config>system_config.xml</config>
+  </instance>
+</instances>
+
+<wiring>
+  <!-- image_publisher 直接喂给 manager，跳过 detector -->
+  <wire from="img_pub" from_port="frame_output"
+        to="gui"       to_port="frame_input"
+        topic="vision/frame"/>
+</wiring>
+
+</pipeline>

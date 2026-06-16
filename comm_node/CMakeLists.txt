@@ -18,4 +18,14 @@ if(rclcpp_FOUND)
     target_link_libraries(comm_node PRIVATE vision_interfaces__rosidl_typesupport_cpp)
 endif()
 
-install(TARGETS comm_node RUNTIME DESTINATION bin)
+install(TARGETS comm_node RUNTIME DESTINATION comm_node)
+
+# 安装 comm_node 所需的配置文件
+install(FILES
+    ${CMAKE_SOURCE_DIR}/config/communication.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zeromq.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_ros2.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zenoh.xml
+    DESTINATION comm_node
+)

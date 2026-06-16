@@ -4,6 +4,8 @@ set(RPC_SOURCES
     src/zeromq_backend.cpp
     src/zenoh_backend.cpp
     src/ros2_backend.cpp
+    src/node_manifest.cpp
+    src/edge_manager.cpp
 )
 
 find_package(Threads REQUIRED)
@@ -14,6 +16,7 @@ target_include_directories(vision_rpc PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/logger/include
+    ${CMAKE_SOURCE_DIR}/deps/json/include
 )
 
 target_link_libraries(vision_rpc PUBLIC

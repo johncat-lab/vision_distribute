@@ -4,9 +4,10 @@ project(vision_distribute LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 设置安装后的 RPATH，让可执行文件自动找到 ../lib/ 下的共享库
-set(CMAKE_INSTALL_RPATH "\$ORIGIN/../lib")
-set(CMAKE_BUILD_RPATH "\$ORIGIN/../lib")
+# 设置安装后的 RPATH，让可执行文件自动找到 ../../lib/ 下的共享库
+# 二进制安装路径: install/bins/<nodename>/<binary>，库路径: install/lib/
+set(CMAKE_INSTALL_RPATH "\$ORIGIN/../../lib")
+set(CMAKE_BUILD_RPATH "\$ORIGIN/../../lib")
 
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "x86_64")
@@ -14,7 +15,7 @@ endif()
 
 # ========== 安装前缀默认值 ==========
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install prefix" FORCE)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install/bins" CACHE PATH "Install prefix" FORCE)
 endif()
 
 # ========== 海康机器人 MVS SDK 配置 ==========
@@ -200,6 +201,7 @@ if(rclcpp_FOUND)
 endif()
 
 add_subdirectory(rpc)
+add_subdirectory(dag)
 
 if(USE_HIK)
     add_subdirectory(camera_node)
@@ -209,6 +211,7 @@ endif()
 
 add_subdirectory(detector_node)
 add_subdirectory(comm_node)
+add_subdirectory(image_publisher_node)
 
 if(BUILD_GUI)
     add_subdirectory(manager)
@@ -217,16 +220,7 @@ endif()
 # ========== 通信验证测试 ==========
 add_subdirectory(tests)
 
-# ========== 安装配置文件 ==========
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/config/
-    DESTINATION config
-)
-
-# ========== 安装模版文件 ==========
-# detector.xml 中 template_dir=./template，对应 install/config/template
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/template/
-    DESTINATION config/template
-)
+# ========== 配置文件和模版文件由各节点 CMakeLists.txt 单独安装 ==========
 
 # ========== Release 优化 ==========
 if(NOT CMAKE_BUILD_TYPE)

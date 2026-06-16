@@ -10,4 +10,4 @@ target_link_libraries(vision_logger PRIVATE
     ${OpenCV_LIBS}
 )
 
-install(TARGETS vision_logger ARCHIVE DESTINATION lib)
+install(TARGETS vision_logger ARCHIVE DESTINATION ../lib)

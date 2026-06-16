@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<pipeline>
+
+<templates>
+  <template name="camera_node">
+    <binary>camera_node</binary>
+    <out port="frame_output" type="FrameMsg"/>
+    <service role="camera"
+             endpoints="set_exposure,set_gain,set_trigger_mode,soft_trigger,get_config"/>
+  </template>
+
+  <template name="detector_node">
+    <binary>detector_node</binary>
+    <in  port="frame_input"       type="FrameMsg"/>
+    <out port="detection_output"  type="DetectionMsg"/>
+    <out port="annotation_output" type="AnnotationMsg"/>
+    <service role="detector"
+             endpoints="get_result,get_config,onoff,set_threshold,reload_template"/>
+  </template>
+
+  <template name="comm_node">
+    <binary>comm_node</binary>
+    <in  port="detection_input" type="DetectionMsg"/>
+    <service role="comm" endpoints="set_config,get_config,get_status"/>
+  </template>
+</templates>
+
+<instances>
+  <instance name="cam_left"  template="camera_node">
+    <config>instances/cam_left/camera_config.xml</config>
+  </instance>
+  <instance name="det_left"  template="detector_node">
+    <config>instances/det_left/detector.xml</config>
+  </instance>
+  <instance name="comm" template="comm_node">
+    <config>communication.xml</config>
+  </instance>
+</instances>
+
+<wiring>
+  <wire from="cam_left"  from_port="frame_output"
+        to="det_left"    to_port="frame_input"
+        topic="cam_left/frame_output"/>
+
+  <wire from="det_left"  from_port="detection_output"
+        to="comm"        to_port="detection_input"
+        topic="det_left/detection_output"/>
+</wiring>
+
+</pipeline>

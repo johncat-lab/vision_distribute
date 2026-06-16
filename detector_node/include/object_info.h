@@ -93,6 +93,10 @@ public:
         return objects_;
     }
 
+    std::vector<ObjectInfo>& getObjects() {
+        return objects_;
+    }
+
     // 打包成协议字符串
     // precision: 浮点数保留的小数位数，默认 3
     std::string toProtocolString(int precision = 3) const {

@@ -3,13 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${SCRIPT_DIR}/../build/install"
-BIN_DIR="${INSTALL_DIR}/bin"
-CONFIG_DIR="${INSTALL_DIR}/config"
+BINS_DIR="${INSTALL_DIR}/bins"
 LOG_DIR="${INSTALL_DIR}/log"
 TRANSPORT="zeromq"
 
 # ROS2 运行时 dlopen 需要找到自定义 typesupport 库
-export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${BINS_DIR}/lib:${LD_LIBRARY_PATH:-}"
 
 # ===== 检测可用的终端模拟器 =====
 detect_terminal() {
@@ -28,35 +27,31 @@ detect_terminal() {
 
 TERMINAL="$(detect_terminal)"
 
-# 支持 --config-dir 和 --transport 参数
+# 支持 --transport 参数
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --config-dir)
-            CONFIG_DIR="$2"
-            shift 2
-            ;;
         --transport)
             TRANSPORT="$2"
             shift 2
             ;;
         *)
             echo "未知参数: $1"
-            echo "用法: $0 [--config-dir <配置目录>] [--transport <zeromq|ros2|zenoh>]"
+            echo "用法: $0 [--transport <zeromq|ros2|zenoh>]"
             exit 1
             ;;
     esac
 done
 
-# 根据 transport 选择对应的系统配置文件
+# 系统配置文件名（根据 transport 选择）
 case "$TRANSPORT" in
     zeromq|zmq)
-        SYSTEM_CONFIG="${CONFIG_DIR}/system_config_zeromq.xml"
+        SYSTEM_CONFIG_NAME="system_config_zeromq.xml"
         ;;
     ros2)
-        SYSTEM_CONFIG="${CONFIG_DIR}/system_config_ros2.xml"
+        SYSTEM_CONFIG_NAME="system_config_ros2.xml"
         ;;
     zenoh)
-        SYSTEM_CONFIG="${CONFIG_DIR}/system_config_zenoh.xml"
+        SYSTEM_CONFIG_NAME="system_config_zenoh.xml"
         ;;
     *)
         echo "错误: 不支持的传输方式: $TRANSPORT"
@@ -65,16 +60,32 @@ case "$TRANSPORT" in
         ;;
 esac
 
-# 如果专用配置文件不存在，回退到默认配置
-if [ ! -f "$SYSTEM_CONFIG" ]; then
-    echo "警告: 未找到专用配置 '$SYSTEM_CONFIG'，回退到默认配置"
-    SYSTEM_CONFIG="${CONFIG_DIR}/system_config.xml"
-fi
+# 每个节点目录结构: install/bins/<nodename>/<binary> + 配置文件
+CAM_DIR="${BINS_DIR}/camera_node"
+DET_DIR="${BINS_DIR}/detector_node"
+COMM_DIR="${BINS_DIR}/comm_node"
+
+# 各节点的系统配置（优先使用专用配置，回退到默认）
+get_system_config() {
+    local node_dir="$1"
+    if [ -f "${node_dir}/${SYSTEM_CONFIG_NAME}" ]; then
+        echo "${node_dir}/${SYSTEM_CONFIG_NAME}"
+    elif [ -f "${node_dir}/system_config.xml" ]; then
+        echo "${node_dir}/system_config.xml"
+    else
+        echo "错误: 未找到系统配置文件: ${node_dir}/${SYSTEM_CONFIG_NAME}" >&2
+        exit 1
+    fi
+}
+
+CAM_SYSTEM_CONFIG="$(get_system_config "${CAM_DIR}")"
+DET_SYSTEM_CONFIG="$(get_system_config "${DET_DIR}")"
+COMM_SYSTEM_CONFIG="$(get_system_config "${COMM_DIR}")"
 
 cleanup() {
     echo ""
     echo "正在停止所有节点..."
-    for proc in camera_node detector_node comm_node; do
+    for proc in camera_node detector_node comm_node image_publisher_node; do
         pkill -f "${proc}" 2>/dev/null && echo "  已终止: ${proc}" || true
     done
     echo "所有节点已停止。"
@@ -85,7 +96,7 @@ trap cleanup SIGINT SIGTERM
 
 # ===== 清理残留进程 =====
 echo "正在清理已有进程..."
-for proc in camera_node detector_node comm_node manager; do
+for proc in camera_node detector_node comm_node image_publisher_node manager; do
     pkill -9 -f "${proc}" 2>/dev/null && echo "  已终止: ${proc}" || true
 done
 sleep 0.5
@@ -95,9 +106,7 @@ echo "========================================"
 echo "  Vision Distribute - 无GUI模式启动"
 echo "========================================"
 echo "传输方式: ${TRANSPORT}"
-echo "系统配置: ${SYSTEM_CONFIG}"
-echo "配置目录: ${CONFIG_DIR}"
-echo "可执行目录: ${BIN_DIR}"
+echo "安装目录: ${BINS_DIR}"
 echo "日志目录: ${LOG_DIR}"
 echo ""
 
@@ -133,16 +142,16 @@ SCRIPTEOF
 
 CAM_LOG="${LOG_DIR}/camera_${LOG_TS}.log"
 CAM_SCRIPT=$(make_script "camera.sh" \
-    "${BIN_DIR}/camera_node --config '${SYSTEM_CONFIG}' --camera-config '${CONFIG_DIR}/camera_config.xml'" \
+    "${CAM_DIR}/camera_node --config '${CAM_SYSTEM_CONFIG}' --camera-config '${CAM_DIR}/camera_config.xml'" \
     "${CAM_LOG}")
 
 DET_LOG="${LOG_DIR}/detector_${LOG_TS}.log"
-DET_CMD="sleep ${NODE_DELAY}; ${BIN_DIR}/detector_node --config '${SYSTEM_CONFIG}' --detector-config '${CONFIG_DIR}/detector.xml'"
+DET_CMD="sleep ${NODE_DELAY}; ${DET_DIR}/detector_node --config '${DET_SYSTEM_CONFIG}' --detector-config '${DET_DIR}/detector.xml'"
 DET_SCRIPT=$(make_script "detector.sh" "$DET_CMD" "${DET_LOG}")
 
 COMM_SLEEP=$(awk "BEGIN {printf \"%.1f\", ${NODE_DELAY} * 2}")
 COMM_LOG="${LOG_DIR}/communication_${LOG_TS}.log"
-COMM_CMD="sleep ${COMM_SLEEP}; ${BIN_DIR}/comm_node --config '${SYSTEM_CONFIG}' --comm-config '${CONFIG_DIR}/communication.xml'"
+COMM_CMD="sleep ${COMM_SLEEP}; ${COMM_DIR}/comm_node --config '${COMM_SYSTEM_CONFIG}' --comm-config '${COMM_DIR}/communication.xml'"
 COMM_SCRIPT=$(make_script "comm.sh" "$COMM_CMD" "${COMM_LOG}")
 
 echo "[启动] 打开终端窗口，包含 3 个 Tab 页..."

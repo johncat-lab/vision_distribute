@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<pipeline>
+
+<templates>
+  <template name="image_publisher_node">
+    <binary>image_publisher_node</binary>
+    <out port="frame_output" type="FrameMsg"/>
+  </template>
+
+  <template name="detector_node">
+    <binary>detector_node</binary>
+    <in  port="frame_input"       type="FrameMsg"/>
+    <out port="detection_output"  type="DetectionMsg"/>
+    <out port="annotation_output" type="AnnotationMsg"/>
+    <service role="detector" endpoints="get_result,get_config,onoff,set_threshold,reload_template"/>
+  </template>
+
+  <template name="comm_node">
+    <binary>comm_node</binary>
+    <in  port="detection_input" type="DetectionMsg"/>
+    <service role="comm" endpoints="set_config,get_config,get_status"/>
+  </template>
+</templates>
+
+<instances>
+  <instance name="img_pub" template="image_publisher_node">
+    <config>image_publisher_config.xml</config>
+  </instance>
+  <instance name="det" template="detector_node">
+    <config>detector.xml</config>
+  </instance>
+  <instance name="comm" template="comm_node">
+    <config>communication.xml</config>
+  </instance>
+</instances>
+
+<wiring>
+  <wire from="img_pub" from_port="frame_output"
+        to="det"       to_port="frame_input"
+        topic="img_pub/frame_output"/>
+
+  <wire from="det"     from_port="detection_output"
+        to="comm"      to_port="detection_input"
+        topic="det/detection_output"/>
+</wiring>
+
+</pipeline>

@@ -1,6 +1,8 @@
 #include "rpc/node_factory.h"
 #include "rpc/config_loader.h"
 #include "rpc/message_types.h"
+#include "rpc/node_manifest.h"
+#include "rpc/edge_manager.h"
 #include "hik_camera.h"
 #include "logger/logger.h"
 
@@ -112,6 +114,18 @@ static void printUsage(const char* prog) {
     LOG_INFO("用法: %s --config <system_config.xml> --camera-config <camera_config.xml>", prog);
 }
 
+// ========== 构建 manifest ==========
+static NodeManifest buildManifest() {
+    NodeManifest m;
+    m.name = "camera_node";
+    m.binary = "camera_node";
+    m.version = "1.0";
+    m.config_file = "camera_config.xml";
+    m.outputs.push_back({"frame_output", "FrameMsg", "相机采集的图像帧"});
+    m.provides_services.push_back({"camera", {"set_exposure", "set_gain", "set_trigger_mode", "soft_trigger", "get_config"}});
+    return m;
+}
+
 // ========== 主函数 ==========
 int main(int argc, char* argv[]) {
     std::string config_path;
@@ -119,7 +133,10 @@ int main(int argc, char* argv[]) {
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--config" && i + 1 < argc) {
+        if (arg == "--describe") {
+            std::cout << buildManifest().toJson() << std::endl;
+            return 0;
+        } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else if (arg == "--camera-config" && i + 1 < argc) {
             camera_config_path = argv[++i];
@@ -163,11 +180,14 @@ int main(int argc, char* argv[]) {
         LOG_INFO("[CameraNode] 未指定相机配置，使用默认值");
     }
 
-    // ---- 3. 创建 NodeFactory ----
+    // ---- 3. 创建 NodeFactory + EdgeManager ----
     NodeFactory factory(config);
+    NodeEdgeManager edges(factory, "camera_node");
+    edges.setDefaultTopic("frame_output", "vision/frame");
+    edges.parseArgs(argc, argv);
 
-    auto frame_pub = factory.createPublisher<FrameMsg>("vision/frame");
-    LOG_INFO("[CameraNode] 帧发布者已创建，topic: vision/frame");
+    auto frame_pub = edges.publish<FrameMsg>("frame_output", "vision/frame");
+    LOG_INFO("[CameraNode] 帧发布者已创建，topic: %s", frame_pub->getTopic().c_str());
 
     auto camera_service = factory.createService<ServiceRequest, ServiceResponse>("camera");
     LOG_INFO("[CameraNode] 相机服务已创建");

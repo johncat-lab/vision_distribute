@@ -3,6 +3,8 @@ set(DETECTOR_SOURCES
     src/opencv_template_detector.cpp
     src/conveyor_detector.cpp
     src/edge_gradient_detector.cpp
+    src/ninepoint_detector.cpp
+    src/calibration_core.cpp
 )
 
 # YOLO 检测器需要 ONNX Runtime
@@ -27,6 +29,23 @@ endif()
 
 if(USE_ONNX)
     target_compile_definitions(detector_node PRIVATE HAS_ONNX)
+    target_include_directories(detector_node PRIVATE ${ORT_INCLUDE_DIR})
+    target_link_libraries(detector_node PRIVATE ${ORT_LIB})
 endif()
 
-install(TARGETS detector_node RUNTIME DESTINATION bin)
+install(TARGETS detector_node RUNTIME DESTINATION detector_node)
+
+# 安装 detector_node 所需的配置文件
+install(FILES
+    ${CMAKE_SOURCE_DIR}/config/detector.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zeromq.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_ros2.xml
+    ${CMAKE_SOURCE_DIR}/config/system_config_zenoh.xml
+    DESTINATION detector_node
+)
+
+# 安装模版文件 (detector.xml 中 template_dir=./template)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/template/
+    DESTINATION detector_node/template
+)
