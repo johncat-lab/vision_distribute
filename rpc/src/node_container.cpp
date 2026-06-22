@@ -1,6 +1,7 @@
 #include "rpc/node_container.h"
 #include "rpc/node_factory.h"
 #include "rpc/types.h"
+#include "dag/service_registry.h"
 #include "logger/logger.h"
 #include <iostream>
 #include <csignal>
@@ -54,6 +55,9 @@ int NodeContainer::run(int argc, char* argv[]) {
     cfg.base_port = 15550;
     factory_ = std::make_unique<NodeFactory>(cfg);
 
+    // 4b) 创建 ServiceRegistry（dag 模块，复用 factory_ 的传输层）
+    service_registry_ = std::make_unique<ServiceRegistry>(*factory_);
+
     // 5) 创建 EdgeManager + ServiceEndpointRegistry
     edges_ = std::make_unique<NodeEdgeManager>(*factory_, node_->describe().name);
     // 使用 --instance / --topic-map 配置 EdgeManager
@@ -69,6 +73,9 @@ int NodeContainer::run(int argc, char* argv[]) {
     LOG_INFO("[NodeContainer] 初始化服务通道: %s",
              node_->describe().name.c_str());
     node_->initServices(*services_);
+
+    // 6b) 将 ServiceEndpointRegistry 端点桥接到 IService 网络传输层
+    bridgeServices();
 
     // 7) 启动
     running_ = true;
@@ -126,4 +133,57 @@ bool NodeContainer::parseArgs(int argc, char* argv[]) {
     LOG_INFO("[NodeContainer] instance=%s, config=%s",
              instance_name_.c_str(), config_file_.c_str());
     return true;
+}
+
+// ========== bridgeServices ==========
+// 将 ServiceEndpointRegistry 中注册的端点桥接到 IService 网络传输层，
+// 并在 ServiceRegistry（dag 模块）中注册角色，使外部可通过网络调用端点。
+void NodeContainer::bridgeServices() {
+    auto manifest = node_->describe();
+    if (manifest.provides_services.empty()) {
+        LOG_INFO("[NodeContainer] %s 无 provides_services，跳过服务桥接",
+                 manifest.name.c_str());
+        return;
+    }
+
+    for (const auto& svc_info : manifest.provides_services) {
+        const std::string& service_name = svc_info.role;
+
+        // 1) 在 ServiceRegistry（dag 模块）中注册角色，用于跨节点角色发现
+        if (service_registry_) {
+            service_registry_->registerRole(
+                service_name, instance_name_, service_name);
+            LOG_INFO("[NodeContainer] 已注册到 ServiceRegistry: role='%s' instance='%s'",
+                     service_name.c_str(), instance_name_.c_str());
+        }
+
+        // 2) 创建 IService 网络传输实例
+        auto service = factory_->createService<ServiceRequest, ServiceResponse>(
+            service_name);
+        if (!service) {
+            LOG_ERROR("[NodeContainer] 无法创建 service: '%s'", service_name.c_str());
+            continue;
+        }
+
+        // 3) 将该 service 的所有端点桥接到 ServiceEndpointRegistry::handle()
+        //    网络请求 → IService::serve() → ServiceEndpointRegistry::handle()
+        //             → 权限检查 → 限流检查 → 实际 handler
+        int endpoint_count = 0;
+        for (const auto& ep_name : svc_info.endpoints) {
+            service->serve(ep_name,
+                [this, ep_name](const ServiceRequest& req) -> ServiceResponse {
+                    // 将请求转发给 ServiceEndpointRegistry 统一处理
+                    ServiceRequest routed_req = req;
+                    routed_req.endpoint = ep_name;
+                    return services_->handle(ep_name, routed_req);
+                });
+            endpoint_count++;
+        }
+
+        LOG_INFO("[NodeContainer] 服务桥接完成: service='%s' 端点数=%d",
+                 service_name.c_str(), endpoint_count);
+
+        // 4) 持有 IService 实例，保持服务线程存活
+        service_instances_.push_back(service);
+    }
 }

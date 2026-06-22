@@ -39,6 +39,7 @@ target_include_directories(camera_node_v2 PRIVATE
 target_link_libraries(camera_node_v2 PRIVATE
     vision_logger
     vision_rpc
+    vision_dag
     ${HIK_MVCAMERACONTROL_LIB}
     ${OpenCV_LIBS}
 )

@@ -59,7 +59,7 @@ target_include_directories(detector_node_v2 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(detector_node_v2 PRIVATE vision_logger vision_rpc ${OpenCV_LIBS})
+target_link_libraries(detector_node_v2 PRIVATE vision_logger vision_rpc vision_dag ${OpenCV_LIBS})
 
 if(rclcpp_FOUND)
     target_link_libraries(detector_node_v2 PRIVATE vision_interfaces__rosidl_typesupport_cpp)

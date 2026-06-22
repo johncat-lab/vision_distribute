@@ -38,6 +38,7 @@ target_include_directories(comm_node_v2 PRIVATE
 target_link_libraries(comm_node_v2 PRIVATE
     vision_logger
     vision_rpc
+    vision_dag
     ${OpenCV_LIBS}
 )
 
