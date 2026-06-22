@@ -4,6 +4,12 @@
 #include "rpc/service_endpoint_registry.h"
 #include "logger/logger.h"
 
+#ifdef HAS_ROS2
+#include "vision_interfaces/srv/comm_set_config.hpp"
+#include "vision_interfaces/srv/comm_get_config.hpp"
+#include "vision_interfaces/srv/comm_get_status.hpp"
+#endif
+
 #include <opencv2/core.hpp>
 #include <filesystem>
 #include <sstream>
@@ -86,6 +92,74 @@ void CommNode::initServices(ServiceEndpointRegistry& services) {
         [this](const ServiceRequest& req) { return handleGetStatus(req); });
 
     LOG_INFO("[CommNode] 已注册 3 个服务端点");
+}
+
+// ========== initServices (ROS2 原生类型注册) ==========
+void CommNode::initServices(ServiceEndpointRegistry& services, NodeContainer& container) {
+    // 先注册通用端点处理函数
+    initServices(services);
+
+#ifdef HAS_ROS2
+    // 注册 ROS2 原生 .srv 类型映射
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CommSetConfig>(
+        "set_config",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = req->config_data;
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CommSetConfig::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::CommSetConfig::Request>();
+            req->config_data = sr.payload;
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CommGetConfig>(
+        "get_config",
+        [](auto) -> ServiceRequest { return ServiceRequest{}; },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->config_data = sr.data;
+        },
+        [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetConfig::Request> {
+            return std::make_shared<vision_interfaces::srv::CommGetConfig::Request>();
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->config_data;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CommGetStatus>(
+        "get_status",
+        [](auto) -> ServiceRequest { return ServiceRequest{}; },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->status_data = sr.data;
+        },
+        [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetStatus::Request> {
+            return std::make_shared<vision_interfaces::srv::CommGetStatus::Request>();
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->status_data;
+            return sr;
+        });
+
+    LOG_INFO("[CommNode] 已注册 3 个 ROS2 原生 service 类型映射");
+#endif
 }
 
 // ========== start ==========

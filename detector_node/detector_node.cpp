@@ -12,6 +12,17 @@
 #include "yolo_detector.h"
 #endif
 
+#ifdef HAS_ROS2
+#include "vision_interfaces/srv/detector_get_result.hpp"
+#include "vision_interfaces/srv/detector_get_config.hpp"
+#include "vision_interfaces/srv/detector_on_off.hpp"
+#include "vision_interfaces/srv/detector_set_threshold.hpp"
+#include "vision_interfaces/srv/detector_set_v_threshold.hpp"
+#include "vision_interfaces/srv/detector_set_grad_threshold.hpp"
+#include "vision_interfaces/srv/detector_reload_template.hpp"
+#include "vision_interfaces/srv/detector_set_segment_mode.hpp"
+#endif
+
 #include <opencv2/core.hpp>
 #include <filesystem>
 #include <sstream>
@@ -115,6 +126,183 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services) {
         [this](const ServiceRequest& req) { return handleSetSegmentMode(req); });
 
     LOG_INFO("[DetectorNode] 已注册 8 个服务端点");
+}
+
+// ========== initServices (ROS2 原生类型注册) ==========
+void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer& container) {
+    // 先注册通用端点处理函数
+    initServices(services);
+
+#ifdef HAS_ROS2
+    // 注册 ROS2 原生 .srv 类型映射，使 ROS2 传输层能正确序列化/反序列化请求和响应
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorGetResult>(
+        "get_result",
+        [](auto) -> ServiceRequest { return ServiceRequest{}; },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->detection_data.assign(sr.data.begin(), sr.data.end());
+        },
+        [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetResult::Request> {
+            return std::make_shared<vision_interfaces::srv::DetectorGetResult::Request>();
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data.assign(resp->detection_data.begin(), resp->detection_data.end());
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorGetConfig>(
+        "get_config",
+        [](auto) -> ServiceRequest { return ServiceRequest{}; },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->ready = sr.success;
+            resp->config_data = sr.data;
+        },
+        [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetConfig::Request> {
+            return std::make_shared<vision_interfaces::srv::DetectorGetConfig::Request>();
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->ready;
+            sr.data = resp->config_data;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorOnOff>(
+        "onoff",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = req->command;
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorOnOff::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::DetectorOnOff::Request>();
+            req->command = sr.payload;
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorSetThreshold>(
+        "set_threshold",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = std::to_string(req->threshold);
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetThreshold::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::DetectorSetThreshold::Request>();
+            req->threshold = std::stof(sr.payload);
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorSetVThreshold>(
+        "set_v_threshold",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = std::to_string(req->threshold);
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetVThreshold::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::DetectorSetVThreshold::Request>();
+            req->threshold = std::stoi(sr.payload);
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorSetGradThreshold>(
+        "set_grad_threshold",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = std::to_string(req->threshold);
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetGradThreshold::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::DetectorSetGradThreshold::Request>();
+            req->threshold = std::stoi(sr.payload);
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorReloadTemplate>(
+        "reload_template",
+        [](auto) -> ServiceRequest { return ServiceRequest{}; },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorReloadTemplate::Request> {
+            return std::make_shared<vision_interfaces::srv::DetectorReloadTemplate::Request>();
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::DetectorSetSegmentMode>(
+        "set_segment_mode",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = req->mode;
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetSegmentMode::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::DetectorSetSegmentMode::Request>();
+            req->mode = sr.payload;
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    LOG_INFO("[DetectorNode] 已注册 8 个 ROS2 原生 service 类型映射");
+#endif
 }
 
 // ========== start ==========

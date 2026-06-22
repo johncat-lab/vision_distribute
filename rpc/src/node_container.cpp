@@ -58,6 +58,16 @@ int NodeContainer::run(int argc, char* argv[]) {
     // 4b) 创建 ServiceRegistry（dag 模块，复用 factory_ 的传输层）
     service_registry_ = std::make_unique<ServiceRegistry>(*factory_);
 
+    // 4c) 提前创建主 IService 实例（供 initServices 注册 ROS2 原生类型）
+    auto manifest = node_->describe();
+    if (!manifest.provides_services.empty()) {
+        const auto& svc_info = manifest.provides_services[0];
+        service_ = factory_->createService<ServiceRequest, ServiceResponse>(svc_info.role);
+        if (service_) {
+            LOG_INFO("[NodeContainer] IService 已提前创建: '%s'", svc_info.role.c_str());
+        }
+    }
+
     // 5) 创建 EdgeManager + ServiceEndpointRegistry
     edges_ = std::make_unique<NodeEdgeManager>(*factory_, node_->describe().name);
     // 使用 --instance / --topic-map 配置 EdgeManager
@@ -72,7 +82,7 @@ int NodeContainer::run(int argc, char* argv[]) {
 
     LOG_INFO("[NodeContainer] 初始化服务通道: %s",
              node_->describe().name.c_str());
-    node_->initServices(*services_);
+    node_->initServices(*services_, *this);
 
     // 6b) 将 ServiceEndpointRegistry 端点桥接到 IService 网络传输层
     bridgeServices();
@@ -146,6 +156,8 @@ void NodeContainer::bridgeServices() {
         return;
     }
 
+    bool service_reused = false;
+
     for (const auto& svc_info : manifest.provides_services) {
         const std::string& service_name = svc_info.role;
 
@@ -157,33 +169,53 @@ void NodeContainer::bridgeServices() {
                      service_name.c_str(), instance_name_.c_str());
         }
 
-        // 2) 创建 IService 网络传输实例
-        auto service = factory_->createService<ServiceRequest, ServiceResponse>(
-            service_name);
-        if (!service) {
-            LOG_ERROR("[NodeContainer] 无法创建 service: '%s'", service_name.c_str());
-            continue;
+        // 2) 获取或创建 IService 网络传输实例
+        //    主服务已在 run() 中提前创建（供 initServices 注册 ROS2 原生类型），
+        //    此处复用；其他角色创建新实例。
+        std::shared_ptr<IService<ServiceRequest, ServiceResponse>> service;
+        if (service_ && !service_reused) {
+            service = service_;
+            service_reused = true;
+        } else {
+            service = factory_->createService<ServiceRequest, ServiceResponse>(
+                service_name);
+            if (!service) {
+                LOG_ERROR("[NodeContainer] 无法创建 service: '%s'", service_name.c_str());
+                continue;
+            }
+            service_instances_.push_back(service);
         }
 
         // 3) 将该 service 的所有端点桥接到 ServiceEndpointRegistry::handle()
         //    网络请求 → IService::serve() → ServiceEndpointRegistry::handle()
         //             → 权限检查 → 限流检查 → 实际 handler
+        //
+        //    ROS2 传输下，端点的原生类型已在 initServices() 中通过
+        //    registerRos2NativeEndpoint<SrvType>() 注册，serve() 会自动
+        //    创建对应的原生 ROS2 service。
         int endpoint_count = 0;
         for (const auto& ep_name : svc_info.endpoints) {
-            service->serve(ep_name,
-                [this, ep_name](const ServiceRequest& req) -> ServiceResponse {
-                    // 将请求转发给 ServiceEndpointRegistry 统一处理
-                    ServiceRequest routed_req = req;
-                    routed_req.endpoint = ep_name;
-                    return services_->handle(ep_name, routed_req);
-                });
-            endpoint_count++;
+            try {
+                service->serve(ep_name,
+                    [this, ep_name](const ServiceRequest& req) -> ServiceResponse {
+                        // 将请求转发给 ServiceEndpointRegistry 统一处理
+                        ServiceRequest routed_req = req;
+                        routed_req.endpoint = ep_name;
+                        return services_->handle(ep_name, routed_req);
+                    });
+                endpoint_count++;
+            } catch (const std::exception& e) {
+                LOG_WARN("[NodeContainer] 端点桥接失败: %s/%s (%s)",
+                         service_name.c_str(), ep_name.c_str(), e.what());
+            }
         }
 
         LOG_INFO("[NodeContainer] 服务桥接完成: service='%s' 端点数=%d",
                  service_name.c_str(), endpoint_count);
+    }
 
-        // 4) 持有 IService 实例，保持服务线程存活
-        service_instances_.push_back(service);
+    // 确保主服务被持有（service_instances_ 管理生命周期）
+    if (service_) {
+        service_instances_.push_back(service_);
     }
 }

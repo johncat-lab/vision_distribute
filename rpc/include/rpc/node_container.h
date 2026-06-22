@@ -44,6 +44,27 @@ public:
     /// @brief 获取 ServiceRegistry（run() 后可用）
     ServiceRegistry* serviceRegistry() { return service_registry_.get(); }
 
+    /// @brief 注册 ROS2 原生 service 类型映射
+    /// 在 initServices() 中调用，将 .srv 类型与端点关联。
+    /// 仅在 ROS2 传输下生效，ZMQ/Zenoh 下为 no-op。
+    template<typename SrvType>
+    void registerRos2NativeEndpoint(
+        const std::string& endpoint,
+        std::function<ServiceRequest(const std::shared_ptr<typename SrvType::Request>&)> toSrvReq,
+        std::function<void(const ServiceResponse&, std::shared_ptr<typename SrvType::Response>)> fromSrvResp,
+        std::function<std::shared_ptr<typename SrvType::Request>(const ServiceRequest&)> toNativeReq,
+        std::function<ServiceResponse(const std::shared_ptr<typename SrvType::Response>&)> fromNativeResp)
+    {
+        if (!service_) return;
+        auto* ros2_svc = dynamic_cast<Ros2Service<ServiceRequest, ServiceResponse>*>(service_.get());
+        if (ros2_svc) {
+            ros2_svc->registerNativeEndpoint<SrvType>(
+                endpoint,
+                std::move(toSrvReq), std::move(fromSrvResp),
+                std::move(toNativeReq), std::move(fromNativeResp));
+        }
+    }
+
 private:
     /// @brief 将 ServiceEndpointRegistry 中的端点桥接到 IService 网络传输
     void bridgeServices();
@@ -54,6 +75,7 @@ private:
     std::unique_ptr<ServiceEndpointRegistry> services_;
 
     // IService 实例必须持有，否则服务线程会被销毁
+    std::shared_ptr<IService<ServiceRequest, ServiceResponse>> service_;  // 主服务（提前创建）
     std::vector<std::shared_ptr<IService<ServiceRequest, ServiceResponse>>> service_instances_;
 
     // dag 模块的角色发现注册表（内部创建，复用 factory_）

@@ -364,6 +364,20 @@ class Ros2Service : public IService<Request, Response> {
 public:
     Ros2Service(const std::string& name, int = 5000, int = 3000, int = 3) : name_(name) {}
     void preconnect() override {}
+
+    /// @brief 存根版本：注册原生 ROS2 service 类型映射（无操作，仅保持 API 一致性）
+    /// HAS_ROS2 未定义时，此方法什么都不做。
+    template<typename SrvType>
+    void registerNativeEndpoint(
+        const std::string&,
+        std::function<ServiceRequest(const std::shared_ptr<typename SrvType::Request>&)>,
+        std::function<void(const ServiceResponse&, std::shared_ptr<typename SrvType::Response>)>,
+        std::function<std::shared_ptr<typename SrvType::Request>(const ServiceRequest&)>,
+        std::function<ServiceResponse(const std::shared_ptr<typename SrvType::Response>&)>)
+    {
+        // ROS2 后端不可用，忽略类型映射注册
+    }
+
     bool serve(const std::string&,
                typename IService<Request, Response>::Handler) override {
         throw std::runtime_error("ROS2 backend not available (rebuild with rclcpp)");

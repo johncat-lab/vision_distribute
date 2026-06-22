@@ -4,6 +4,14 @@
 #include "rpc/service_endpoint_registry.h"
 #include "logger/logger.h"
 
+#ifdef HAS_ROS2
+#include "vision_interfaces/srv/camera_set_exposure.hpp"
+#include "vision_interfaces/srv/camera_set_gain.hpp"
+#include "vision_interfaces/srv/camera_set_trigger_mode.hpp"
+#include "vision_interfaces/srv/camera_soft_trigger.hpp"
+#include "vision_interfaces/srv/camera_get_config.hpp"
+#endif
+
 // 类型别名（与原 main.cpp 保持一致）
 using TriggerMode = HikTriggerMode;
 using TriggerSource = HikTriggerSource;
@@ -120,6 +128,120 @@ void CameraNode::initServices(ServiceEndpointRegistry& services) {
         [this](const ServiceRequest& req) { return handleGetConfig(req); });
 
     LOG_INFO("[CameraNode] 已注册 5 个服务端点");
+}
+
+// ========== initServices (ROS2 原生类型注册) ==========
+void CameraNode::initServices(ServiceEndpointRegistry& services, NodeContainer& container) {
+    // 先注册通用端点处理函数
+    initServices(services);
+
+#ifdef HAS_ROS2
+    // 注册 ROS2 原生 .srv 类型映射
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CameraSetExposure>(
+        "set_exposure",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = std::to_string(req->exposure_time);
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetExposure::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::CameraSetExposure::Request>();
+            req->exposure_time = std::stof(sr.payload);
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CameraSetGain>(
+        "set_gain",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = std::to_string(req->gain);
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetGain::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::CameraSetGain::Request>();
+            req->gain = std::stof(sr.payload);
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CameraSetTriggerMode>(
+        "set_trigger_mode",
+        [](auto req) -> ServiceRequest {
+            ServiceRequest sr;
+            sr.payload = req->mode;
+            return sr;
+        },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetTriggerMode::Request> {
+            auto req = std::make_shared<vision_interfaces::srv::CameraSetTriggerMode::Request>();
+            req->mode = sr.payload;
+            return req;
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CameraSoftTrigger>(
+        "soft_trigger",
+        [](auto) -> ServiceRequest { return ServiceRequest{}; },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->message = sr.data;
+        },
+        [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraSoftTrigger::Request> {
+            return std::make_shared<vision_interfaces::srv::CameraSoftTrigger::Request>();
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->message;
+            return sr;
+        });
+
+    container.registerRos2NativeEndpoint<vision_interfaces::srv::CameraGetConfig>(
+        "get_config",
+        [](auto) -> ServiceRequest { return ServiceRequest{}; },
+        [](const ServiceResponse& sr, auto resp) {
+            resp->success = sr.success;
+            resp->config_data = sr.data;
+        },
+        [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraGetConfig::Request> {
+            return std::make_shared<vision_interfaces::srv::CameraGetConfig::Request>();
+        },
+        [](auto resp) -> ServiceResponse {
+            ServiceResponse sr;
+            sr.success = resp->success;
+            sr.data = resp->config_data;
+            return sr;
+        });
+
+    LOG_INFO("[CameraNode] 已注册 5 个 ROS2 原生 service 类型映射");
+#endif
 }
 
 // ========== start：打开相机并开始采集 ==========

@@ -8,6 +8,7 @@
 #include <functional>
 
 class NodeEdgeManager;  // 前向声明
+class NodeContainer;     // 前向声明
 class ServiceRegistry;   // 前向声明
 class ServiceEndpointRegistry; // 前向声明
 
@@ -30,7 +31,18 @@ public:
 
     /// @brief 初始化服务通道（注册提供的服务端点）
     /// @param services 端点注册表，用来注册 RPC 处理函数
-    virtual void initServices(ServiceEndpointRegistry& services) {}
+    virtual void initServices(ServiceEndpointRegistry& services) = 0;
+
+    /// @brief 初始化服务通道（注册端点 + ROS2 原生类型映射）
+    /// 默认实现委托给 initServices(ServiceEndpointRegistry&)。
+    /// 需要 ROS2 支持的节点应覆盖此方法，通过 container.registerRos2NativeEndpoint()
+    /// 注册 .srv 类型映射。
+    /// @param services 端点注册表
+    /// @param container 节点容器，可调用 registerRos2NativeEndpoint<SrvType>()
+    virtual void initServices(ServiceEndpointRegistry& services, NodeContainer& container) {
+        (void)container;
+        initServices(services);
+    }
 
     /// @brief 主循环开始前调用（可选：打开硬件、加载模型等）
     /// @return true=启动成功

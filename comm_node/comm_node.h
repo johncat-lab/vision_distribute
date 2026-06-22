@@ -23,6 +23,7 @@ public:
     void initDataflow(NodeEdgeManager& edges,
                        const std::string& config_file) override;
     void initServices(ServiceEndpointRegistry& services) override;
+    void initServices(ServiceEndpointRegistry& services, NodeContainer& container) override;
 
     bool start() override;
     void stop() override;

@@ -25,6 +25,7 @@ public:
 
     // ========== 服务通道初始化 ==========
     void initServices(ServiceEndpointRegistry& services) override;
+    void initServices(ServiceEndpointRegistry& services, NodeContainer& container) override;
 
     // ========== 生命周期 ==========
     bool start() override;
