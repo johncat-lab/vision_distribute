@@ -3,6 +3,7 @@
 #include "rpc/message_types.h"
 #include "rpc/node_manifest.h"
 #include "rpc/edge_manager.h"
+#include "dag/service_registry.h"
 #include "vision_server.h"
 #include "tcp_client.h"
 #include "object_info.h"
@@ -283,6 +284,12 @@ int main(int argc, char* argv[]) {
     // 4. 创建检测消息订阅者
     auto detection_sub = edges.subscribe<DetectionMsg>("detection_input", "vision/detection");
     LOG_INFO("[CommNode] 检测订阅者已创建，topic: %s", detection_sub->getTopic().c_str());
+
+    // 4b. 创建 ServiceRegistry 并注册 role
+    static ServiceRegistry registry(factory);
+    const std::string inst_name = edges.instanceName().empty() ? std::string("comm") : edges.instanceName();
+    registry.registerRole("comm", inst_name, "comm");
+    LOG_INFO("[CommNode] 已注册到 ServiceRegistry: role=comm instance=%s", inst_name.c_str());
 
     // 5. 创建服务端
     auto service = factory.createService<ServiceRequest, ServiceResponse>("comm");

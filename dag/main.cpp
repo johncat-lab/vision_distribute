@@ -1,35 +1,39 @@
-#include "dag/dag_scheduler.h"
-#include "rpc/config_loader.h"
+#include "dag/dag_launcher.h"
 #include "logger/logger.h"
 
 #include <iostream>
 #include <string>
 #include <vector>
 #include <csignal>
-#include <cstdlib>
-#include <cstring>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <filesystem>
 #include <atomic>
 #include <chrono>
 #include <thread>
 
 static std::atomic<bool> g_running{true};
-static std::vector<pid_t> g_children;
+static DagLauncher* g_launcher = nullptr;
 
 static void signalHandler(int sig) {
     (void)sig;
     g_running = false;
+    if (g_launcher) {
+        g_launcher->stop();
+    }
 }
 
 static void printUsage(const char* prog) {
-    std::cout << "用法: " << prog << " --pipeline <pipeline.xml> [--bins-dir <path>] [--dry-run]\n";
+    std::cout << "用法: " << prog << " --pipeline <pipeline.xml> [--bins-dir <path>] [--parallel] [--dry-run]\n";
     std::cout << "\n选项:\n";
     std::cout << "  --pipeline <path>   pipeline.xml 路径（必需）\n";
     std::cout << "  --bins-dir <path>   节点 binary 目录（默认: pipeline.xml 同级）\n";
+    std::cout << "  --parallel          按层并行启动（同层节点无依赖，同时启动）\n";
     std::cout << "  --dry-run           仅打印启动命令，不实际启动\n";
-    std::cout << "  --startup-delay <ms> 节点间启动间隔（毫秒，默认 500）\n";
+    std::cout << "  --startup-delay <ms> 节点间/层间启动间隔（毫秒，默认 200）\n";
+    std::cout << "  --max-retries <n>   启动失败重试次数（默认 3）\n";
+    std::cout << "  --retry-delay <ms>  每次重试的等待时间（毫秒，默认 1000）\n";
+    std::cout << "  --no-auto-restart   关闭崩溃自动重启功能（默认开启）\n";
+    std::cout << "  --max-restarts <n>  每个节点的最大重启次数（默认 10）\n";
+    std::cout << "  --auto-restart-delay <ms> 自动重启的等待时间（毫秒，默认 2000）\n";
+    std::cout << "  --status-report     启动过程中定期打印状态报告（调试用）\n";
     std::cout << "  --help              显示此帮助\n";
 }
 
@@ -37,7 +41,14 @@ int main(int argc, char* argv[]) {
     std::string pipeline_path;
     std::string bins_dir;
     bool dry_run = false;
-    int startup_delay_ms = 500;
+    bool parallel = false;
+    int startup_delay_ms = 200;
+    int max_retries = 3;
+    int retry_delay_ms = 1000;
+    bool auto_restart = true;
+    int max_restarts = 10;
+    int auto_restart_delay_ms = 2000;
+    bool status_report = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -47,8 +58,22 @@ int main(int argc, char* argv[]) {
             bins_dir = argv[++i];
         } else if (arg == "--dry-run") {
             dry_run = true;
+        } else if (arg == "--parallel") {
+            parallel = true;
         } else if (arg == "--startup-delay" && i + 1 < argc) {
             startup_delay_ms = std::atoi(argv[++i]);
+        } else if (arg == "--max-retries" && i + 1 < argc) {
+            max_retries = std::atoi(argv[++i]);
+        } else if (arg == "--retry-delay" && i + 1 < argc) {
+            retry_delay_ms = std::atoi(argv[++i]);
+        } else if (arg == "--no-auto-restart") {
+            auto_restart = false;
+        } else if (arg == "--max-restarts" && i + 1 < argc) {
+            max_restarts = std::atoi(argv[++i]);
+        } else if (arg == "--auto-restart-delay" && i + 1 < argc) {
+            auto_restart_delay_ms = std::atoi(argv[++i]);
+        } else if (arg == "--status-report") {
+            status_report = true;
         } else if (arg == "--help" || arg == "-h") {
             printUsage(argv[0]);
             return 0;
@@ -61,34 +86,30 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 默认 bins_dir 为 pipeline.xml 所在目录
-    if (bins_dir.empty()) {
-        bins_dir = std::filesystem::path(pipeline_path).parent_path().string();
-        if (bins_dir.empty()) bins_dir = ".";
-    }
-
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    LOG_INFO("[DagLauncher] pipeline: %s", pipeline_path.c_str());
-    LOG_INFO("[DagLauncher] bins-dir: %s", bins_dir.c_str());
+    DagLauncher launcher;
+    g_launcher = &launcher;
+    launcher.setMaxRetries(max_retries);
+    launcher.setRetryDelayMs(retry_delay_ms);
+    launcher.setAutoRestart(auto_restart);
+    launcher.setMaxRestarts(max_restarts);
+    launcher.setAutoRestartDelayMs(auto_restart_delay_ms);
 
-    // ========== 加载 + 校验 ==========
-    DagScheduler scheduler;
-    if (!scheduler.loadFromXml(pipeline_path)) {
-        LOG_ERROR("[DagLauncher] 无法加载 pipeline.xml: %s", pipeline_path.c_str());
+    if (!launcher.loadPipeline(pipeline_path, bins_dir)) {
         return 1;
     }
 
-    std::string validation_error;
-    if (!scheduler.validate(validation_error)) {
-        LOG_ERROR("[DagLauncher] DAG 校验失败:\n%s", validation_error.c_str());
+    std::string error_msg;
+    if (!launcher.validatePipeline(error_msg)) {
+        LOG_ERROR("[DagLauncher] DAG 校验失败:\n%s", error_msg.c_str());
         return 1;
     }
 
-    auto order = scheduler.computeStartupOrder();
+    auto order = launcher.getStartupOrder();
     if (order.empty()) {
-        LOG_ERROR("[DagLauncher] DAG 中存在环，无法启动");
+        LOG_ERROR("[DagLauncher] 启动顺序为空（可能存在环）");
         return 1;
     }
 
@@ -97,138 +118,104 @@ int main(int argc, char* argv[]) {
         LOG_INFO("  %zu. %s", i + 1, order[i].c_str());
     }
 
-    // ========== dry-run ==========
+    // 打印分层信息
+    auto layers = launcher.getStartupLayers();
+    if (!layers.empty()) {
+        LOG_INFO("[DagLauncher] 分层信息 (%zu 层):", layers.size());
+        for (size_t li = 0; li < layers.size(); ++li) {
+            std::string s;
+            for (size_t ni = 0; ni < layers[li].size(); ++ni) {
+                if (ni > 0) s += ",";
+                s += layers[li][ni];
+            }
+            LOG_INFO("  层 %zu: [%s]", li, s.c_str());
+        }
+    }
+
+    // 打印 service 依赖关系
+    auto providers = launcher.getRoleProviders();
+    auto requirements = launcher.getRoleRequirements();
+    if (!providers.empty()) {
+        LOG_INFO("[DagLauncher] Service 角色提供者:");
+        for (const auto& [role, insts] : providers) {
+            std::string s;
+            for (size_t i = 0; i < insts.size(); ++i) {
+                if (i > 0) s += ",";
+                s += insts[i];
+            }
+            LOG_INFO("  %s -> [%s]", role.c_str(), s.c_str());
+        }
+    }
+    if (!requirements.empty()) {
+        LOG_INFO("[DagLauncher] Service 依赖:");
+        for (const auto& [name, roles] : requirements) {
+            std::string s;
+            for (size_t i = 0; i < roles.size(); ++i) {
+                if (i > 0) s += ",";
+                s += roles[i];
+            }
+            LOG_INFO("  %s requires [%s]", name.c_str(), s.c_str());
+        }
+    }
+
     if (dry_run) {
         std::cout << "\n=== Dry Run: 启动命令 ===\n\n";
+        auto configs = launcher.getLaunchConfigs();
         for (const auto& inst_name : order) {
-            std::string binary = scheduler.getBinary(inst_name);
-            std::string config = scheduler.getConfig(inst_name);
-            std::string topic_map = scheduler.getTopicMap(inst_name);
-
-            std::string binary_path = bins_dir + "/" + binary + "/" + binary;
-
-            std::cout << binary_path;
-            if (!config.empty()) {
-                std::cout << " --config " << config;
+            auto it = configs.find(inst_name);
+            if (it == configs.end()) continue;
+            std::cout << it->second.binary_path;
+            if (!it->second.config_file.empty()) {
+                std::cout << " --config " << it->second.config_file;
             }
             std::cout << " --instance " << inst_name;
-            if (!topic_map.empty()) {
-                std::cout << " --topic-map " << topic_map;
+            if (!it->second.topic_map.empty()) {
+                std::cout << " --topic-map " << it->second.topic_map;
             }
             std::cout << "\n\n";
         }
         return 0;
     }
 
-    // ========== 启动节点 ==========
-    for (const auto& inst_name : order) {
-        if (!g_running) break;
-
-        std::string binary = scheduler.getBinary(inst_name);
-        std::string config = scheduler.getConfig(inst_name);
-        std::string topic_map = scheduler.getTopicMap(inst_name);
-
-        std::string binary_path = bins_dir + "/" + binary + "/" + binary;
-
-        if (!std::filesystem::exists(binary_path)) {
-            LOG_WARN("[DagLauncher] binary 不存在: %s (跳过 %s)", binary_path.c_str(), inst_name.c_str());
-            continue;
+    // 设置状态回调
+    launcher.setStatusCallback([](const std::string& name,
+                                    NodeRuntimeStatus status,
+                                    const std::string& err) {
+        const char* status_str = "UNKNOWN";
+        switch (status) {
+            case NodeRuntimeStatus::PENDING:  status_str = "PENDING";  break;
+            case NodeRuntimeStatus::STARTING: status_str = "STARTING"; break;
+            case NodeRuntimeStatus::RUNNING:  status_str = "RUNNING";  break;
+            case NodeRuntimeStatus::EXITED:   status_str = "EXITED";   break;
+            case NodeRuntimeStatus::CRASHED:  status_str = "CRASHED";  break;
+            case NodeRuntimeStatus::FAILED:   status_str = "FAILED";   break;
         }
-
-        // 构建参数列表
-        std::vector<std::string> args;
-        args.push_back(binary_path);
-        if (!config.empty()) {
-            args.push_back("--config");
-            args.push_back(config);
+        if (!err.empty()) {
+            LOG_INFO("[DagLauncher] %s 状态: %s (%s)", name.c_str(), status_str, err.c_str());
+        } else {
+            LOG_INFO("[DagLauncher] %s 状态: %s", name.c_str(), status_str);
         }
-        args.push_back("--instance");
-        args.push_back(inst_name);
-        if (!topic_map.empty()) {
-            args.push_back("--topic-map");
-            args.push_back(topic_map);
-        }
+    });
 
-        LOG_INFO("[DagLauncher] 启动: %s", inst_name.c_str());
-        for (const auto& a : args) {
-            LOG_INFO("  %s", a.c_str());
-        }
-
-        pid_t pid = fork();
-        if (pid < 0) {
-            LOG_ERROR("[DagLauncher] fork 失败: %s", strerror(errno));
-            continue;
-        }
-
-        if (pid == 0) {
-            // 子进程
-            std::vector<char*> c_args;
-            for (auto& a : args) c_args.push_back(const_cast<char*>(a.c_str()));
-            c_args.push_back(nullptr);
-
-            execv(c_args[0], c_args.data());
-            // execv 失败才到这里
-            LOG_ERROR("[DagLauncher] execv 失败: %s (%s)", c_args[0], strerror(errno));
-            _exit(1);
-        }
-
-        // 父进程
-        g_children.push_back(pid);
-        LOG_INFO("[DagLauncher] %s PID=%d", inst_name.c_str(), pid);
-
-        // 节点间启动间隔
-        if (startup_delay_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(startup_delay_ms));
-        }
+    // 启动所有节点
+    if (parallel) {
+        LOG_INFO("[DagLauncher] 使用按层并行启动模式");
+        launcher.launchParallel(startup_delay_ms);
+    } else {
+        LOG_INFO("[DagLauncher] 使用顺序启动模式");
+        launcher.launch(startup_delay_ms);
     }
+    LOG_INFO("[DagLauncher] 所有节点启动完成，等待退出信号...");
 
-    // ========== 等待退出信号 ==========
-    LOG_INFO("[DagLauncher] 所有节点已启动，等待退出信号...");
-
+    int report_counter = 0;
     while (g_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-        // 检查子进程状态
-        for (auto it = g_children.begin(); it != g_children.end(); ) {
-            int status;
-            pid_t result = waitpid(*it, &status, WNOHANG);
-            if (result > 0) {
-                LOG_WARN("[DagLauncher] 子进程 PID=%d 已退出 (status=%d)", result, WEXITSTATUS(status));
-                it = g_children.erase(it);
-            } else {
-                ++it;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (status_report) {
+            report_counter++;
+            if (report_counter % 20 == 0) {
+                std::cout << launcher.getStatusReport() << std::endl;
             }
         }
-    }
-
-    // ========== 清理 ==========
-    LOG_INFO("[DagLauncher] 收到退出信号，正在终止子进程...");
-    for (auto pid : g_children) {
-        kill(pid, SIGTERM);
-    }
-
-    // 等待子进程退出（最多 5 秒）
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (std::chrono::steady_clock::now() < deadline && !g_children.empty()) {
-        for (auto it = g_children.begin(); it != g_children.end(); ) {
-            int status;
-            pid_t result = waitpid(*it, &status, WNOHANG);
-            if (result > 0) {
-                it = g_children.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        if (!g_children.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    }
-
-    // 强制 kill 剩余的
-    for (auto pid : g_children) {
-        LOG_WARN("[DagLauncher] 强制 kill PID=%d", pid);
-        kill(pid, SIGKILL);
-        waitpid(pid, nullptr, 0);
     }
 
     LOG_INFO("[DagLauncher] 已停止");

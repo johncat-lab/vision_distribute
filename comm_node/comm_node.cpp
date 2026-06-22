@@ -1,0 +1,175 @@
+#include "comm_node.h"
+#include "rpc/node_factory.h"
+#include "rpc/edge_manager.h"
+#include "rpc/service_endpoint_registry.h"
+#include "logger/logger.h"
+
+#include <opencv2/core.hpp>
+#include <filesystem>
+#include <sstream>
+#include <thread>
+#include <chrono>
+
+CommNode::~CommNode() {
+    stop();
+}
+
+// ========== 配置加载 ==========
+CommNode::CommConfig CommNode::loadConfig(const std::string& path) {
+    CommConfig cfg;
+    if (path.empty()) return cfg;
+    cv::FileStorage fs(path, cv::FileStorage::READ);
+    if (!fs.isOpened()) {
+        LOG_WARN("[CommNode] 无法打开通信配置文件: %s", path.c_str());
+        return cfg;
+    }
+    if (!fs["mode"].empty())          cfg.mode = (std::string)fs["mode"];
+    if (!fs["host"].empty())          cfg.host = (std::string)fs["host"];
+    if (!fs["port"].empty())          cfg.port = (int)fs["port"];
+    if (!fs["server_mode"].empty()) cfg.server_mode = (int)fs["server_mode"];
+    if (!fs["interval_ms"].empty()) cfg.interval_ms = (int)fs["interval_ms"];
+    fs.release();
+    return cfg;
+}
+
+bool CommNode::saveConfig(const std::string& path, const CommConfig& cfg) {
+    cv::FileStorage fs(path, cv::FileStorage::WRITE);
+    if (!fs.isOpened()) {
+        LOG_ERROR("[CommNode] 无法写入配置: %s", path.c_str());
+        return false;
+    }
+    fs << "mode" << cfg.mode;
+    fs << "host" << cfg.host;
+    fs << "cfg.port";
+    fs << "server_mode" << cfg.server_mode;
+    fs << "interval_ms" << cfg.interval_ms;
+    fs.release();
+    return true;
+}
+
+// ========== manifest ==========
+NodeManifest CommNode::describe() const {
+    NodeManifest m;
+    m.name = "comm_node";
+    m.binary = "comm_node";
+    m.version = "1.0";
+    m.config_file = "communication.xml";
+    m.inputs.push_back({"detection_input", "DetectionMsg", "检测结果"});
+    m.provides_services.push_back({"comm", {"set_config", "get_config", "get_status"}});
+    return m;
+}
+
+// ========== initDataflow ==========
+void CommNode::initDataflow(NodeEdgeManager& edges,
+                               const std::string& config_file) {
+    edges.setDefaultTopic("detection_input", "vision/detection");
+    detection_sub_ = edges.subscribe<DetectionMsg>("detection_input", "vision/detection");
+
+    detection_sub_->setCallback([this](const DetectionMsg& msg) {
+        std::lock_guard<std::mutex> lock(detection_mutex_);
+        latest_detection_ = msg;
+        (void)msg;
+    });
+
+    LOG_INFO("[CommNode] 数据流通道已初始化");
+}
+
+// ========== initServices ==========
+void CommNode::initServices(ServiceEndpointRegistry& services) {
+    services.registerEndpoint({"set_config", "设置通信配置", false, 0},
+        [this](const ServiceRequest& req) { return handleSetConfig(req); });
+
+    services.registerEndpoint({"get_config", "获取当前通信配置", false, 0},
+        [this](const ServiceRequest& req) { return handleGetConfig(req); });
+
+    services.registerEndpoint({"get_status", "获取连接状态", false, 0},
+        [this](const ServiceRequest& req) { return handleGetStatus(req); });
+
+    LOG_INFO("[CommNode] 已注册 3 个服务端点");
+}
+
+// ========== start ==========
+bool CommNode::start() {
+    cfg_ = loadConfig("communication.xml");
+
+    try {
+        if (cfg_.mode == "client") {
+            client_ = std::make_unique<TcpClient>(cfg_.host, cfg_.port);
+            if (client_) client_->connect();
+            LOG_INFO("[CommNode] TCP 客户端已启动 %s:%d",
+                     cfg_.host.c_str(), cfg_.port);
+        } else {
+            server_ = std::make_unique<VisionServer>(cfg_.port);
+            if (server_) server_->start();
+            LOG_INFO("[CommNode] TCP 服务器已启动 port=%d", cfg_.port);
+        }
+        return true;
+    } catch (const std::exception& e) {
+        LOG_ERROR("[CommNode] 启动失败: %s", e.what());
+        return false;
+    }
+}
+
+// ========== stop ==========
+void CommNode::stop() {
+    if (server_) { server_->stop(); server_.reset(); }
+    if (client_) { client_->disconnect(); client_.reset(); }
+    LOG_INFO("[CommNode] 已停止");
+}
+
+// ========== tick：在主循环中按 interval_ms 频率向外部推送结果 ==========
+void CommNode::tick(std::atomic<bool>& running) {
+    int interval = std::max(10, cfg_.interval_ms);
+    while (running) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+
+        if (latest_detection_.object_count > 0) {
+            std::string result;
+            {
+                std::lock_guard<std::mutex> lock(detection_mutex_);
+                std::ostringstream oss;
+                oss << "camera_id=" << latest_detection_.camera_id
+                     << " frame=" << latest_detection_.frame_num
+                     << " objects=" << latest_detection_.object_count;
+                for (const auto& obj : latest_detection_.objects) {
+                    oss << " [" << obj.label << " conf=" << obj.confidence << "]";
+                }
+                result = oss.str();
+            }
+            std::lock_guard<std::mutex> lock(comm_mutex_);
+            if (server_) server_->sendToAll(result);
+            if (client_) client_->send(result);
+        }
+    }
+}
+
+// ========== 服务端点处理 ==========
+ServiceResponse CommNode::handleSetConfig(const ServiceRequest& req) {
+    ServiceResponse resp;
+    resp.success = true;
+    resp.data = "配置已更新: " + req.payload;
+    return resp;
+}
+
+ServiceResponse CommNode::handleGetConfig(const ServiceRequest& req) {
+    (void)req;
+    ServiceResponse resp;
+    std::ostringstream oss;
+    oss << "mode=" << cfg_.mode << " host=" << cfg_.host
+        << " port=" << cfg_.port << " interval_ms=" << cfg_.interval_ms;
+    resp.success = true;
+    resp.data = oss.str();
+    return resp;
+}
+
+ServiceResponse CommNode::handleGetStatus(const ServiceRequest& req) {
+    (void)req;
+    ServiceResponse resp;
+    resp.success = true;
+    std::ostringstream oss;
+    oss << "mode=" << cfg_.mode;
+    if (server_) oss << " server_running=1 clients=" << server_->clientCount();
+    if (client_) oss << " client_connected=" << (client_->isConnected() ? 1 : 0);
+    resp.data = oss.str();
+    return resp;
+}

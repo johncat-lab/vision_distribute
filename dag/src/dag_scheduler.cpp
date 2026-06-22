@@ -61,6 +61,12 @@ bool DagScheduler::loadFromXml(const std::string& pipeline_path) {
                 td.services.push_back(si);
             }
 
+            // 解析 <requires>元素（逗号分隔的角色列表）
+            XMLElement* req = t->FirstChildElement("requires");
+            if (req && req->GetText()) {
+                td.requires_services = splitComma(req->GetText());
+            }
+
             templates_[td.name] = td;
         }
     }
@@ -230,15 +236,22 @@ std::vector<std::string> DagScheduler::topoSort() const {
         }
     }
 
-    // 对每个有 requires_services 的实例，添加依赖边
+    // 对每个有 requires_services 的实例，添加依赖边：provider -> consumer
     for (const auto& [name, inst] : instances_) {
         auto tit = templates_.find(inst.template_name);
         if (tit == templates_.end()) continue;
 
-        // 检查 requires_services（存在 manifest 中，但这里从 template 中读取）
-        // TODO: 当前 template 中没有 requires_services 字段，
-        // 后续可以从 --describe 扫描时写入 pipeline.xml 的 template
-        // 暂时从 XML 的 <template> 中解析 <requires> 元素
+        for (const auto& req_role : tit->second.requires_services) {
+            auto rit = role_providers.find(req_role);
+            if (rit == role_providers.end()) continue;
+
+            for (const auto& provider : rit->second) {
+                if (provider == name) continue;  // 跳过自依赖
+                if (adj[provider].insert(name).second) {
+                    in_degree[name]++;
+                }
+            }
+        }
     }
 
     // Kahn's algorithm
@@ -270,6 +283,83 @@ std::vector<std::string> DagScheduler::topoSort() const {
 // ========== computeStartupOrder ==========
 std::vector<std::string> DagScheduler::computeStartupOrder() const {
     return topoSort();
+}
+
+// ========== computeStartupLayers (Kahn's per-layer) ==========
+std::vector<std::vector<std::string>> DagScheduler::computeStartupLayers() const {
+    // 与 topoSort 使用相同的图构建逻辑
+    std::map<std::string, std::set<std::string>> adj;
+    std::map<std::string, int> in_degree;
+
+    for (const auto& [name, _] : instances_) {
+        in_degree[name] = 0;
+        adj[name] = {};
+    }
+
+    // 数据流依赖
+    for (const auto& w : wires_) {
+        if (adj[w.from_instance].insert(w.to_instance).second) {
+            in_degree[w.to_instance]++;
+        }
+    }
+
+    // Service 依赖: requires_services 推导
+    std::map<std::string, std::vector<std::string>> role_providers;
+    for (const auto& [name, inst] : instances_) {
+        auto tit = templates_.find(inst.template_name);
+        if (tit == templates_.end()) continue;
+        for (const auto& svc : tit->second.services) {
+            role_providers[svc.role].push_back(name);
+        }
+    }
+
+    for (const auto& [name, inst] : instances_) {
+        auto tit = templates_.find(inst.template_name);
+        if (tit == templates_.end()) continue;
+
+        for (const auto& req_role : tit->second.requires_services) {
+            auto rit = role_providers.find(req_role);
+            if (rit == role_providers.end()) continue;
+            for (const auto& provider : rit->second) {
+                if (provider == name) continue;
+                if (adj[provider].insert(name).second) {
+                    in_degree[name]++;
+                }
+            }
+        }
+    }
+
+    // Kahn's algorithm: 按层收集
+    std::vector<std::vector<std::string>> layers;
+    std::map<std::string, int> deg = in_degree;
+
+    while (true) {
+        std::vector<std::string> current_layer;
+        for (const auto& [name, d] : deg) {
+            if (d == 0) current_layer.push_back(name);
+        }
+
+        if (current_layer.empty()) break;
+
+        // 从 deg 中"移除"当前层
+        for (const auto& name : current_layer) {
+            deg[name] = -1;  // 标记为已处理
+            for (const auto& next : adj[name]) {
+                deg[next]--;
+            }
+        }
+
+        layers.push_back(std::move(current_layer));
+    }
+
+    // 检查是否有剩余节点未被处理（存在环）
+    size_t total_in_layers = 0;
+    for (const auto& layer : layers) total_in_layers += layer.size();
+    if (total_in_layers != instances_.size()) {
+        return {};  // 存在环
+    }
+
+    return layers;
 }
 
 // ========== getBinary ==========

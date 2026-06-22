@@ -15,6 +15,7 @@ public:
         std::vector<NodeManifest::PortInfo> inputs;
         std::vector<NodeManifest::PortInfo> outputs;
         std::vector<NodeManifest::ServiceInfo> services;
+        std::vector<std::string> requires_services;
     };
 
     /// @brief pipeline.xml 中的实例定义
@@ -44,6 +45,10 @@ public:
     /// @brief 拓扑排序，计算启动顺序（数据流 + service 依赖）
     /// @return 按启动顺序排列的实例名列表
     std::vector<std::string> computeStartupOrder() const;
+
+    /// @brief 分层拓扑排序，同层节点无相互依赖，可并行启动
+    /// @return 各层实例名列表（第 0 层先启动，依次类推）
+    std::vector<std::vector<std::string>> computeStartupLayers() const;
 
     /// @brief 获取某个实例对应的 binary 名
     std::string getBinary(const std::string& instance_name) const;

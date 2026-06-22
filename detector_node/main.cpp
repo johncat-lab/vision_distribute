@@ -3,6 +3,7 @@
 #include "rpc/message_types.h"
 #include "rpc/node_manifest.h"
 #include "rpc/edge_manager.h"
+#include "dag/service_registry.h"
 
 #include "detector.h"
 #include "opencv_template_detector.h"
@@ -333,6 +334,12 @@ int main(int argc, char* argv[]) {
     // 创建标注发布者
     g_annotation_pub = edges.publish<AnnotationMsg>("annotation_output", "vision/annotation");
     LOG_INFO("[Detector] 标注发布者已创建，topic: %s", g_annotation_pub->getTopic().c_str());
+
+    // 创建 ServiceRegistry 并注册 role
+    static ServiceRegistry registry(factory);
+    const std::string inst_name = edges.instanceName().empty() ? std::string("detector") : edges.instanceName();
+    registry.registerRole("detector", inst_name, "detector");
+    LOG_INFO("[Detector] 已注册到 ServiceRegistry: role=detector instance=%s", inst_name.c_str());
 
     // 创建服务 (detector/get_result, detector/get_config)
     auto service = factory.createService<ServiceRequest, ServiceResponse>("detector");

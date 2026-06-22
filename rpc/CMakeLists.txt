@@ -6,6 +6,8 @@ set(RPC_SOURCES
     src/ros2_backend.cpp
     src/node_manifest.cpp
     src/edge_manager.cpp
+    src/service_endpoint_registry.cpp
+    src/node_container.cpp
 )
 
 find_package(Threads REQUIRED)

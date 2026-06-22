@@ -3,6 +3,7 @@
 #include "rpc/message_types.h"
 #include "rpc/node_manifest.h"
 #include "rpc/edge_manager.h"
+#include "dag/service_registry.h"
 #include "hik_camera.h"
 #include "logger/logger.h"
 
@@ -188,6 +189,12 @@ int main(int argc, char* argv[]) {
 
     auto frame_pub = edges.publish<FrameMsg>("frame_output", "vision/frame");
     LOG_INFO("[CameraNode] 帧发布者已创建，topic: %s", frame_pub->getTopic().c_str());
+
+    // ---- 3b. 创建 ServiceRegistry 并注册 role ----
+    static ServiceRegistry registry(factory);
+    const std::string instance_name = edges.instanceName().empty() ? std::string("camera") : edges.instanceName();
+    registry.registerRole("camera", instance_name, "camera");
+    LOG_INFO("[CameraNode] 已注册到 ServiceRegistry: role=camera instance=%s", instance_name.c_str());
 
     auto camera_service = factory.createService<ServiceRequest, ServiceResponse>("camera");
     LOG_INFO("[CameraNode] 相机服务已创建");

@@ -19,6 +19,7 @@
     <binary>comm_node</binary>
     <in  port="detection_input" type="DetectionMsg"/>
     <service role="comm" endpoints="set_config,get_config,get_status"/>
+    <requires>detector</requires>
   </template>
 </templates>
 

@@ -1,6 +1,7 @@
 set(DAG_SOURCES
     src/dag_scheduler.cpp
     src/service_registry.cpp
+    src/dag_launcher.cpp
 )
 
 add_library(vision_dag STATIC ${DAG_SOURCES})
