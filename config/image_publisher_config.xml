@@ -1,31 +1,11 @@
 <?xml version="1.0"?>
 <opencv_storage>
-<!-- ===== 图像发布器配置 ===== -->
-
-<!-- 图像目录路径（扫描目录中所有图像文件，按文件名排序）-->
-<!-- 若同时配置了 image_files，则优先使用 image_files 列表 -->
-<image_dir>./images</image_dir>
-
-<!-- 指定图像文件列表（可选，优先级高于 image_dir）-->
-<!-- 如需指定特定文件，取消注释并填写路径 -->
-<!--
+<image_dir>.</image_dir>
 <image_files>
-  <file>/path/to/image1.png</file>
-  <file>/path/to/image2.png</file>
-  <file>/path/to/image3.jpg</file>
+    <item>test.png</item>
 </image_files>
--->
-
-<!-- 发布帧率 (fps) -->
-<fps>10</fps>
-
-<!-- 是否循环发布所有图像 (1=是, 0=否) -->
+<fps>1</fps>
 <loop>1</loop>
-
-<!-- 模拟的相机 ID -->
 <camera_id>0</camera_id>
-
-<!-- 像素格式: Mono8 | RGB8 | BGR8 等（影响 FrameMsg 的 pixel_type 字段）-->
-<pixel_format>Mono8</pixel_format>
-
+<pixel_format>BGR8</pixel_format>
 </opencv_storage>

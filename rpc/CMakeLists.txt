@@ -20,10 +20,12 @@ target_include_directories(vision_rpc PUBLIC
     ${CMAKE_SOURCE_DIR}/logger/include
     ${CMAKE_SOURCE_DIR}/dag/include
     ${CMAKE_SOURCE_DIR}/deps/json/include
+    ${CMAKE_BINARY_DIR}/vision_messages
 )
 
 target_link_libraries(vision_rpc PUBLIC
     vision_logger
+    vision_messages_proto
     cppzmq
     ${OpenCV_LIBS}
     Threads::Threads

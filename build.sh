@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
         -j*)        JOBS="${1#-j}";       shift ;;
         -h|--help)  usage; exit 0 ;;
         clean)      TARGET="clean";       shift ;;
-        all|camera|detector|comm|manager|rpc|core|image-publisher|dag-launcher)
+        all|camera|detector|comm|manager|rpc|core|image-publisher|dag-launcher|inspector)
                     TARGET="$1";          shift ;;
         *)          die "未知参数 '$1'，使用 --help 查看帮助" ;;
     esac
@@ -89,6 +89,21 @@ if [[ -f "$ROS2_SETUP" ]]; then
     echo "[环境] 已加载 ROS2 Humble"
 fi
 
+# ========== Conda 环境 ==========
+CONDA_ENV="vision_x86"
+CONDA_PREFIX_PATH=""
+if command -v conda &> /dev/null; then
+    # 查找 conda 环境
+    CONDA_PREFIX_PATH=$(conda run -n "$CONDA_ENV" bash -c 'echo $CONDA_PREFIX' 2>/dev/null || true)
+    if [[ -n "$CONDA_PREFIX_PATH" ]] && [[ -d "$CONDA_PREFIX_PATH" ]]; then
+        echo "[环境] Conda 环境: $CONDA_ENV ($CONDA_PREFIX_PATH)"
+        # 添加 conda bin 到 PATH
+        export PATH="${CONDA_PREFIX_PATH}/bin:$PATH"
+    else
+        echo "[环境] Conda 环境 '$CONDA_ENV' 未找到，将使用系统默认路径"
+    fi
+fi
+
 # ========== 准备构建目录 ==========
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
@@ -105,11 +120,26 @@ echo ""
 
 # ========== 检测可选依赖 ==========
 USE_HIK="OFF"
-if [[ -f /opt/MVS/include/MvCameraControl.h ]] && [[ -f /opt/MVS/lib/64/libMvCameraControl.so ]]; then
+HIK_SDK_PATH=""
+
+# macOS 路径优先检测
+if [[ -d "/Library/MVS_SDK" ]]; then
+    if [[ -f "/Library/MVS_SDK/Includes/MvCameraControl.h" ]]; then
+        USE_HIK="ON"
+        HIK_SDK_PATH="/Library/MVS_SDK"
+        echo "[检测] 海康 MVS SDK (macOS): ${HIK_SDK_PATH}"
+    else
+        echo "[检测] 海康 MVS SDK: /Library/MVS_SDK 存在但缺少头文件"
+    fi
+# Linux 路径检测
+elif [[ -f /opt/MVS/include/MvCameraControl.h ]] && [[ -f /opt/MVS/lib/64/libMvCameraControl.so ]]; then
     USE_HIK="ON"
-    echo "[检测] 海康 MVS SDK: /opt/MVS"
+    HIK_SDK_PATH="/opt/MVS"
+    echo "[检测] 海康 MVS SDK (Linux): ${HIK_SDK_PATH}"
 else
     echo "[检测] 海康 MVS SDK: 未找到 (camera_node 将被跳过)"
+    echo "         macOS: 安装到 /Library/MVS_SDK"
+    echo "         Linux: 安装到 /opt/MVS"
 fi
 
 USE_ONNX="OFF"
@@ -151,13 +181,31 @@ fi
 
 if [[ "$NEED_CONFIGURE" == "true" ]]; then
     echo ">>> CMake 配置..."
-    cmake "${SCRIPT_DIR}" \
-        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-        -DBUILD_GUI="${BUILD_GUI}" \
-        -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}/bins" \
-        -DUSE_HIK="${USE_HIK}" \
-        -DUSE_ONNX="${USE_ONNX}" \
+    
+    # 构建 CMake 参数
+    CMAKE_ARGS=(
+        "${SCRIPT_DIR}"
+        -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+        -DBUILD_GUI="${BUILD_GUI}"
+        -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}/bins"
+        -DUSE_HIK="${USE_HIK}"
+        -DUSE_ONNX="${USE_ONNX}"
         -DUSE_NCNN="${USE_NCNN}"
+    )
+    
+    # 添加 conda 环境路径
+    if [[ -n "$CONDA_PREFIX_PATH" ]]; then
+        CMAKE_ARGS+=(-DCMAKE_PREFIX_PATH="${CONDA_PREFIX_PATH}")
+        CMAKE_ARGS+=(-DProtobuf_ROOT="${CONDA_PREFIX_PATH}")
+        CMAKE_ARGS+=(-Dtinyxml2_ROOT="${CONDA_PREFIX_PATH}")
+    fi
+    
+    # 添加海康SDK路径
+    if [[ -n "$HIK_SDK_PATH" ]]; then
+        CMAKE_ARGS+=(-DHIK_SDK_ROOT="${HIK_SDK_PATH}")
+    fi
+    
+    cmake "${CMAKE_ARGS[@]}"
     if [[ $? -ne 0 ]]; then
         die "CMake 配置失败，请检查依赖是否安装。可尝试: -DUSE_HIK=OFF -DUSE_ONNX=OFF -DUSE_NCNN=OFF"
     fi
@@ -320,6 +368,29 @@ elif [[ "$TARGET" == "manager" ]]; then
     install_node "manager"
     mkdir -p "${INSTALL_DIR}/bins/manager"
     cp -f "${SCRIPT_DIR}/config/system_config"*.xml "${INSTALL_DIR}/bins/manager/"
+    echo ""
+
+elif [[ "$TARGET" == "inspector" ]]; then
+    if [[ "$BUILD_GUI" != "ON" ]]; then
+        die "inspector 需要 --gui 选项启用 Qt6 支持"
+    fi
+    if ! check_target "system_inspector_gui"; then
+        die "system_inspector_gui 目标不存在，请确认 Qt6 已安装并重新配置。"
+    fi
+    build_node_deps
+    build_target "vision_dag"
+    build_target "system_inspector_gui"
+    echo ">>> 安装..."
+    install_libs
+    INSPECTOR_DIR="${INSTALL_DIR}/bins/inspector"
+    mkdir -p "${INSPECTOR_DIR}"
+    if [[ -f "${BUILD_DIR}/inspector/system_inspector_gui" ]]; then
+        cp -f "${BUILD_DIR}/inspector/system_inspector_gui" "${INSPECTOR_DIR}/"
+    fi
+    cp -f "${SCRIPT_DIR}/config/dag_"*.xml "${INSPECTOR_DIR}/" 2>/dev/null || true
+    cp -f "${SCRIPT_DIR}/config/pipeline_"*.xml "${INSPECTOR_DIR}/" 2>/dev/null || true
+    cp -f "${SCRIPT_DIR}/config/test_pipeline.xml" "${INSPECTOR_DIR}/" 2>/dev/null || true
+    echo "    已安装: ${INSPECTOR_DIR}/"
     echo ""
 fi
 

@@ -1,5 +1,7 @@
 <?xml version="1.0"?>
 <opencv_storage>
+<!-- 相机类型: hik(海康), basler(巴斯勒), dahua(大华), opencv(USB摄像头) -->
+<camera_type>hik</camera_type>
 <camera_index>0</camera_index>
 <!-- 触发模式: continuous(连续采集) | off(同continuous) | line0 | line1 | line2 | software -->
 <trigger_mode>continuous</trigger_mode>

@@ -53,8 +53,8 @@ ServiceResponse ServiceEndpointRegistry::handle(const std::string& endpoint_name
         LOG_ERROR("[EndpointRegistry] 端点 '%s' 处理异常: %s",
                   endpoint_name.c_str(), e.what());
         ServiceResponse resp;
-        resp.success = false;
-        resp.data = std::string("internal_error: ") + e.what();
+        resp.set_success(false);
+        resp.set_data(std::string("internal_error: ") + e.what());
         return resp;
     }
 }
@@ -101,21 +101,21 @@ bool ServiceEndpointRegistry::checkRateLimit(EndpointEntry& entry) {
 
 ServiceResponse ServiceEndpointRegistry::permissionDenied(const std::string& endpoint) {
     ServiceResponse resp;
-    resp.success = false;
-    resp.data = "permission_denied: " + endpoint + " requires admin";
+    resp.set_success(false);
+    resp.set_data("permission_denied: " + endpoint + " requires admin");
     return resp;
 }
 
 ServiceResponse ServiceEndpointRegistry::rateLimited(const std::string& endpoint) {
     ServiceResponse resp;
-    resp.success = false;
-    resp.data = "rate_limit_exceeded: " + endpoint;
+    resp.set_success(false);
+    resp.set_data("rate_limit_exceeded: " + endpoint);
     return resp;
 }
 
 ServiceResponse ServiceEndpointRegistry::notFound(const std::string& endpoint) {
     ServiceResponse resp;
-    resp.success = false;
-    resp.data = "endpoint_not_found: " + endpoint;
+    resp.set_success(false);
+    resp.set_data("endpoint_not_found: " + endpoint);
     return resp;
 }

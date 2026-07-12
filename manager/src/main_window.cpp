@@ -565,12 +565,25 @@ void MainWindow::setupRPC(const std::string& config_path)
 
     frame_sub_->subscribe([this](const FrameMsg& msg) {
         QMutexLocker locker(&frame_mutex_);
-        current_frame_ = cv::Mat(msg.height, msg.width,
-                                 msg.pixel_type == 1 ? CV_8UC3 : CV_8UC1,
-                                 const_cast<uint8_t*>(msg.data.data())).clone();
-        current_frame_num_ = msg.frame_num;
+        
+        int height = msg.height();
+        int width = msg.width();
+        int pixel_type = msg.pixel_type();
+        int cv_type = (pixel_type == 1) ? CV_8UC3 : CV_8UC1;
+        
+        // 创建 Mat 并直接从 Protobuf 数据复制
+        current_frame_ = cv::Mat(height, width, cv_type);
+        const std::string& data = msg.data();
+        if (data.size() == static_cast<size_t>(height * width * (pixel_type == 1 ? 3 : 1))) {
+            std::memcpy(current_frame_.data, data.data(), data.size());
+        } else {
+            LOG_ERROR("[Manager] 帧数据大小不匹配: 期望=%d, 实际=%zu", 
+                     height * width * (pixel_type == 1 ? 3 : 1), data.size());
+        }
+        
+        current_frame_num_ = msg.frame_num();
         frame_updated_ = true;
-        LOG_DEBUG("[Manager] 收到帧#%d, 尺寸=%dx%d, 像素类型=%d", msg.frame_num, msg.width, msg.height, msg.pixel_type);
+        LOG_DEBUG("[Manager] 收到帧#%d, 尺寸=%dx%d, 像素类型=%d", msg.frame_num(), width, height, pixel_type);
         
         // 统计帧率
         frame_count_++;
@@ -596,7 +609,7 @@ void MainWindow::setupRPC(const std::string& config_path)
         QMutexLocker locker(&annotation_mutex_);
         latest_annotation_ = msg;
         annotation_updated_ = true;
-        LOG_DEBUG("[Manager] 收到 AnnotationMsg: 帧#%d, 物体数=%d, 模板尺寸=%dx%d", msg.frame_num, msg.objects.size(), msg.template_width, msg.template_height);
+        LOG_DEBUG("[Manager] 收到 AnnotationMsg: 帧#%d, 物体数=%d, 模板尺寸=%dx%d", msg.frame_num(), msg.objects.size(), msg.template_width(), msg.template_height());
     });
 }
 
@@ -607,25 +620,25 @@ void MainWindow::initUIFromNodes()
     // 拉取 camera 配置
     callService("camera", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (resp.success && !resp.data.empty()) {
-                parseAndApplyCameraConfig(resp.data);
+            if (resp.success() && !resp.data().empty()) {
+                parseAndApplyCameraConfig(resp.data());
             }
         });
 
     // 拉取 detector 配置
     callService("detector", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (!resp.data.empty()) {
-                parseAndApplyDetectorConfig(resp.data);
-                text_detector_info_->setText(QString::fromStdString(resp.data));
+            if (!resp.data().empty()) {
+                parseAndApplyDetectorConfig(resp.data());
+                text_detector_info_->setText(QString::fromStdString(resp.data()));
             }
         });
 
     // 拉取 comm 配置
     callService("comm", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (resp.success && !resp.data.empty()) {
-                parseAndApplyCommConfig(resp.data);
+            if (resp.success() && !resp.data().empty()) {
+                parseAndApplyCommConfig(resp.data());
             }
         });
 }
@@ -761,7 +774,7 @@ void MainWindow::onUpdateDisplay()
                 ann = latest_annotation_;
                 annotation_updated_ = false;
                 need_annotation_overlay = true;
-                LOG_DEBUG("[Manager] 使用 AnnotationMsg 绘制: 帧#%d, 物体数=%d", ann.frame_num, ann.objects.size());
+                LOG_DEBUG("[Manager] 使用 AnnotationMsg 绘制: 帧#%d, 物体数=%d", ann.frame_num(), ann.objects.size());
             }
         }
         
@@ -792,7 +805,7 @@ void MainWindow::onRefreshStatus()
 {
     callService("camera", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (resp.success) {
+            if (resp.success()) {
                 status_camera_->setText("Camera: OK");
                 status_camera_->setStyleSheet("color: green; font-weight: bold;");
             } else {
@@ -803,7 +816,7 @@ void MainWindow::onRefreshStatus()
 
     callService("detector", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (resp.success) {
+            if (resp.success()) {
                 status_detector_->setText("Detector: OK");
                 status_detector_->setStyleSheet("color: green; font-weight: bold;");
             } else {
@@ -814,7 +827,7 @@ void MainWindow::onRefreshStatus()
 
     callService("comm", "get_status", "",
         [this](const ServiceResponse& resp) {
-            if (resp.success) {
+            if (resp.success()) {
                 status_comm_->setText("Comm: OK");
                 status_comm_->setStyleSheet("color: green; font-weight: bold;");
             } else {
@@ -853,12 +866,12 @@ void MainWindow::onCameraGetConfig()
 {
     callService("camera", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (resp.success) {
-                parseAndApplyCameraConfig(resp.data);
+            if (resp.success()) {
+                parseAndApplyCameraConfig(resp.data());
             }
             text_camera_info_->setText(
-                resp.success ? QString::fromStdString(resp.data)
-                             : "Error: " + QString::fromStdString(resp.data));
+                resp.success() ? QString::fromStdString(resp.data())
+                             : "Error: " + QString::fromStdString(resp.data()));
         });
 }
 
@@ -892,12 +905,12 @@ void MainWindow::onDetectorGetConfig()
 {
     callService("detector", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (!resp.data.empty()) {
-                parseAndApplyDetectorConfig(resp.data);
+            if (!resp.data().empty()) {
+                parseAndApplyDetectorConfig(resp.data());
             }
             text_detector_info_->setText(
-                resp.success ? QString::fromStdString(resp.data)
-                             : "Not Ready: " + QString::fromStdString(resp.data));
+                resp.success() ? QString::fromStdString(resp.data())
+                             : "Not Ready: " + QString::fromStdString(resp.data()));
         });
 }
 
@@ -909,13 +922,13 @@ void MainWindow::onDetectorReloadTemplate()
         [this](const ServiceResponse& resp) {
             btn_reload_template_->setEnabled(true);
             btn_reload_template_->setText("Reload Template");
-            if (resp.success) {
+            if (resp.success()) {
                 statusBar()->showMessage("Template reloaded successfully", 3000);
                 // 刷新配置显示
                 onDetectorGetConfig();
             } else {
                 QMessageBox::warning(this, "Reload Template Failed",
-                    QString::fromStdString(resp.data));
+                    QString::fromStdString(resp.data()));
             }
         });
 }
@@ -928,7 +941,7 @@ void MainWindow::onDetectorOnOff()
     callService("detector", "onoff", cmd,
         [this](const ServiceResponse& resp) {
             btn_detector_onoff_->setEnabled(true);
-            if (resp.success) {
+            if (resp.success()) {
                 detector_enabled_ = !detector_enabled_;
                 if (detector_enabled_) {
                     btn_detector_onoff_->setText("Disable Detector");
@@ -941,7 +954,7 @@ void MainWindow::onDetectorOnOff()
                 }
             } else {
                 QMessageBox::warning(this, "Detector On/Off Failed",
-                    QString::fromStdString(resp.data));
+                    QString::fromStdString(resp.data()));
             }
         });
 }
@@ -970,12 +983,12 @@ void MainWindow::onCommGetConfig()
 {
     callService("comm", "get_config", "",
         [this](const ServiceResponse& resp) {
-            if (resp.success) {
-                parseAndApplyCommConfig(resp.data);
+            if (resp.success()) {
+                parseAndApplyCommConfig(resp.data());
             }
             text_comm_info_->setText(
-                resp.success ? QString::fromStdString(resp.data)
-                             : "Error: " + QString::fromStdString(resp.data));
+                resp.success() ? QString::fromStdString(resp.data())
+                             : "Error: " + QString::fromStdString(resp.data()));
         });
 }
 
@@ -984,8 +997,8 @@ void MainWindow::onCommGetStatus()
     callService("comm", "get_status", "",
         [this](const ServiceResponse& resp) {
             text_comm_info_->setText(
-                resp.success ? QString::fromStdString(resp.data)
-                             : "Error: " + QString::fromStdString(resp.data));
+                resp.success() ? QString::fromStdString(resp.data())
+                             : "Error: " + QString::fromStdString(resp.data()));
         });
 }
 
@@ -997,8 +1010,8 @@ void MainWindow::callService(const std::string& service_name,
                               const std::function<void(const ServiceResponse&)>& callback)
 {
     ServiceRequest req;
-    req.endpoint = endpoint;
-    req.payload  = payload;
+    req.set_endpoint(endpoint);
+    req.set_payload(payload);
 
     std::shared_ptr<IService<ServiceRequest, ServiceResponse>> svc;
     std::atomic<bool>* guard = nullptr;
@@ -1027,10 +1040,10 @@ void MainWindow::callService(const std::string& service_name,
         ServiceResponse resp;
         try {
             resp = svc->call(endpoint, req);
-            LOG_DEBUG("[callService] %s/%s SUCCESS, data=%s", service_name.c_str(), endpoint.c_str(), resp.data.substr(0, 80).c_str());
+            LOG_DEBUG("[callService] %s/%s SUCCESS, data=%s", service_name.c_str(), endpoint.c_str(), resp.data().substr(0, 80).c_str());
         } catch (const std::exception& e) {
-            resp.success = false;
-            resp.data = e.what();
+            resp.set_success(false);
+            resp.set_data(e.what());
             LOG_ERROR("[callService] %s/%s FAILED: %s", service_name.c_str(), endpoint.c_str(), e.what());
         }
 
@@ -1081,12 +1094,12 @@ void MainWindow::updateImageDisplay(const cv::Mat& mat)
 
 void MainWindow::overlayDetections(cv::Mat& mat, const DetectionMsg& msg)
 {
-    if (msg.protocol_string.empty() || msg.protocol_string == "NG") {
+    if (msg.protocol_string().empty() || msg.protocol_string() == "NG") {
         return;
     }
 
     // 解析协议字符串: "TA,x,y,a,t,..."  多个目标以 ';' 分隔
-    std::istringstream stream(msg.protocol_string);
+    std::istringstream stream(msg.protocol_string());
     std::string token;
     while (std::getline(stream, token, ';')) {
         if (token.empty()) continue;
@@ -1133,8 +1146,8 @@ void MainWindow::overlayAnnotations(cv::Mat& mat, const AnnotationMsg& msg)
         return;
     }
 
-    int template_w = static_cast<int>(msg.template_width);
-    int template_h = static_cast<int>(msg.template_height);
+    int template_w = static_cast<int>(msg.template_width());
+    int template_h = static_cast<int>(msg.template_height());
     
     LOG_DEBUG("[Manager] overlayAnnotations: 模板尺寸=%dx%d", template_w, template_h);
 

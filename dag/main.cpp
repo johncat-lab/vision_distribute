@@ -207,6 +207,7 @@ int main(int argc, char* argv[]) {
     }
     LOG_INFO("[DagLauncher] 所有节点启动完成，等待退出信号...");
 
+    // 主循环：等待退出信号
     int report_counter = 0;
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -218,6 +219,10 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // 优雅退出：等待所有子进程清理完成
+    LOG_INFO("[DagLauncher] 收到退出信号，正在清理...");
+    launcher.stop();  // 这会等待所有子进程退出（超时5秒）
+    
     LOG_INFO("[DagLauncher] 已停止");
     return 0;
 }

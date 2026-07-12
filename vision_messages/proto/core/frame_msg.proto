@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package vision.messages.core;
+
+option cc_generic_services = false;
+
+/**
+ * @message FrameMsg
+ * @brief 相机帧消息
+ * @owner 相机模块开发人员
+ * @version 1.0
+ * @since 2026-06-23
+ * 
+ * @description
+ * 从相机节点接收的图像帧数据，包含相机参数和像素数据。
+ */
+message FrameMsg {
+    int32 camera_id = 1;              // 相机ID
+    int64 timestamp = 2;              // 时间戳（毫秒）
+    uint32 width = 3;                 // 图像宽度
+    uint32 height = 4;                // 图像高度
+    uint32 pixel_type = 5;            // 像素格式
+    uint32 frame_num = 6;             // 帧序号
+    float exposure_time = 7;          // 曝光时间（微秒）
+    float gain = 8;                   // 增益值（dB）
+    bytes data = 9;                   // 像素数据（二进制）
+}

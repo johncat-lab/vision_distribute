@@ -1295,6 +1295,132 @@ cv::Point2d refineCrossCenterByBrightCentroid(const cv::Mat& gray,
     return bright_center;
 }
 
+// ============================================================
+// 优化函数: 圆轮廓净化 - 排除十字架区域的轮廓点
+// 适用于: 黑色圆形 + 白色十字架 标定板
+// ============================================================
+static std::vector<cv::Point> purifyCircleContour(const cv::Mat& gray,
+                                                   const std::vector<cv::Point>& contour,
+                                                   const cv::Point2d& center,
+                                                   double radius) {
+    if (contour.empty()) return contour;
+
+    std::vector<cv::Point> purified;
+    purified.reserve(contour.size());
+
+    double min_dist_sq = (radius * 0.15) * (radius * 0.15);
+    double max_dist_sq = (radius * 1.5) * (radius * 1.5);
+
+    for (const auto& pt : contour) {
+        double dx = pt.x - center.x;
+        double dy = pt.y - center.y;
+        double dist_sq = dx * dx + dy * dy;
+
+        if (dist_sq < min_dist_sq || dist_sq > max_dist_sq) continue;
+
+        if (pt.y >= 0 && pt.y < gray.rows && pt.x >= 0 && pt.x < gray.cols) {
+            uint8_t val = gray.at<uint8_t>(pt.y, pt.x);
+            if (val > 180) continue;
+        }
+
+        purified.push_back(pt);
+    }
+
+    return purified;
+}
+
+// ============================================================
+// 优化函数: 高斯拟合十字中心
+// 使用二维高斯函数拟合十字架的亮度分布，获取亚像素级中心
+// ============================================================
+static cv::Point2d refineCrossCenterByGaussian(const cv::Mat& gray,
+                                                 const cv::Point2d& rough_center,
+                                                 double radius) {
+    int roi_half = std::max(6, static_cast<int>(radius * 0.5));
+    int cx = cvRound(rough_center.x);
+    int cy = cvRound(rough_center.y);
+
+    int x0 = std::max(0, cx - roi_half);
+    int y0 = std::max(0, cy - roi_half);
+    int x1 = std::min(gray.cols - 1, cx + roi_half);
+    int y1 = std::min(gray.rows - 1, cy + roi_half);
+
+    if (x1 <= x0 || y1 <= y0) return rough_center;
+
+    cv::Rect roi_rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    cv::Mat roi = gray(roi_rect);
+
+    cv::Mat float_roi;
+    roi.convertTo(float_roi, CV_64F);
+
+    cv::Mat circle_mask = cv::Mat::zeros(roi.rows, roi.cols, CV_64F);
+    cv::Point mask_center(cx - x0, cy - y0);
+    int mask_radius = static_cast<int>(radius * 0.4);
+    cv::circle(circle_mask, mask_center, mask_radius, cv::Scalar(1.0), -1);
+
+    cv::Mat masked_roi = float_roi.mul(circle_mask);
+
+    double sum_w = 0, sum_wx = 0, sum_wy = 0;
+    double sum_wx2 = 0, sum_wy2 = 0, sum_wxy = 0;
+
+    for (int y = 0; y < roi.rows; ++y) {
+        for (int x = 0; x < roi.cols; ++x) {
+            double val = masked_roi.at<double>(y, x);
+            if (val < 50) continue;
+
+            double weight = (val - 50);
+            weight = weight * weight;
+
+            double dx = x - mask_center.x;
+            double dy = y - mask_center.y;
+
+            sum_w += weight;
+            sum_wx += weight * dx;
+            sum_wy += weight * dy;
+            sum_wx2 += weight * dx * dx;
+            sum_wy2 += weight * dy * dy;
+            sum_wxy += weight * dx * dy;
+        }
+    }
+
+    if (sum_w < 1e-10) return rough_center;
+
+    double mean_x = sum_wx / sum_w;
+    double mean_y = sum_wy / sum_w;
+
+    double var_x = sum_wx2 / sum_w - mean_x * mean_x;
+    double var_y = sum_wy2 / sum_w - mean_y * mean_y;
+    double cov_xy = sum_wxy / sum_w - mean_x * mean_y;
+
+    cv::Mat cov(2, 2, CV_64F);
+    cov.at<double>(0, 0) = var_x;
+    cov.at<double>(0, 1) = cov_xy;
+    cov.at<double>(1, 0) = cov_xy;
+    cov.at<double>(1, 1) = var_y;
+
+    cv::Mat eigenvalues, eigenvectors;
+    cv::eigen(cov, eigenvalues, eigenvectors);
+
+    double lambda1 = eigenvalues.at<double>(0, 0);
+    double lambda2 = eigenvalues.at<double>(1, 0);
+
+    if (lambda1 < 1 || lambda2 < 1) return rough_center;
+
+    double sigma_x = std::sqrt(lambda1);
+    double sigma_y = std::sqrt(lambda2);
+
+    if (sigma_x > radius * 0.4 || sigma_y > radius * 0.4) return rough_center;
+
+    cv::Point2d refined_local(mean_x + mask_center.x, mean_y + mask_center.y);
+    cv::Point2d refined_global(refined_local.x + x0, refined_local.y + y0);
+
+    double shift = std::sqrt(std::pow(refined_global.x - rough_center.x, 2) +
+                              std::pow(refined_global.y - rough_center.y, 2));
+    if (shift > radius * 0.3) return rough_center;
+
+    return refined_global;
+}
+
 cv::Point2d refineCircleCenter(const cv::Mat& gray, const cv::Point2d& rough_center, double radius, const std::vector<cv::Point>& contour, double* out_fitted_radius) {
     cv::Point2d center = rough_center;
     double fitted_radius = 0;
@@ -1310,25 +1436,51 @@ cv::Point2d refineCircleCenter(const cv::Mat& gray, const cv::Point2d& rough_cen
             pts = sampled;
         }
 
-        cv::Mat A(pts.size(), 3, CV_64F);
-        cv::Mat b_mat(pts.size(), 1, CV_64F);
-        for (size_t i = 0; i < pts.size(); ++i) {
-            double xi = pts[i].x;
-            double yi = pts[i].y;
-            A.at<double>(i, 0) = 2.0 * xi;
-            A.at<double>(i, 1) = 2.0 * yi;
-            A.at<double>(i, 2) = 1.0;
-            b_mat.at<double>(i, 0) = xi * xi + yi * yi;
-        }
-        cv::Mat x;
-        if (cv::solve(A, b_mat, x, cv::DECOMP_SVD)) {
-            double fit_cx = x.at<double>(0, 0);
-            double fit_cy = x.at<double>(1, 0);
-            double fit_c = x.at<double>(2, 0);
-            fitted_radius = std::sqrt(fit_cx * fit_cx + fit_cy * fit_cy + fit_c);
-            double dist = std::sqrt(std::pow(fit_cx - rough_center.x, 2) + std::pow(fit_cy - rough_center.y, 2));
-            if (dist < radius * 0.5) {
-                center = cv::Point2d(fit_cx, fit_cy);
+        std::vector<cv::Point> purified_pts = purifyCircleContour(gray, pts, center, radius);
+
+        if (purified_pts.size() >= 10) {
+            cv::Mat A(purified_pts.size(), 3, CV_64F);
+            cv::Mat b_mat(purified_pts.size(), 1, CV_64F);
+            for (size_t i = 0; i < purified_pts.size(); ++i) {
+                double xi = purified_pts[i].x;
+                double yi = purified_pts[i].y;
+                A.at<double>(i, 0) = 2.0 * xi;
+                A.at<double>(i, 1) = 2.0 * yi;
+                A.at<double>(i, 2) = 1.0;
+                b_mat.at<double>(i, 0) = xi * xi + yi * yi;
+            }
+            cv::Mat x;
+            if (cv::solve(A, b_mat, x, cv::DECOMP_SVD)) {
+                double fit_cx = x.at<double>(0, 0);
+                double fit_cy = x.at<double>(1, 0);
+                double fit_c = x.at<double>(2, 0);
+                fitted_radius = std::sqrt(fit_cx * fit_cx + fit_cy * fit_cy + fit_c);
+                double dist = std::sqrt(std::pow(fit_cx - rough_center.x, 2) + std::pow(fit_cy - rough_center.y, 2));
+                if (dist < radius * 0.5) {
+                    center = cv::Point2d(fit_cx, fit_cy);
+                }
+            }
+        } else {
+            cv::Mat A(pts.size(), 3, CV_64F);
+            cv::Mat b_mat(pts.size(), 1, CV_64F);
+            for (size_t i = 0; i < pts.size(); ++i) {
+                double xi = pts[i].x;
+                double yi = pts[i].y;
+                A.at<double>(i, 0) = 2.0 * xi;
+                A.at<double>(i, 1) = 2.0 * yi;
+                A.at<double>(i, 2) = 1.0;
+                b_mat.at<double>(i, 0) = xi * xi + yi * yi;
+            }
+            cv::Mat x;
+            if (cv::solve(A, b_mat, x, cv::DECOMP_SVD)) {
+                double fit_cx = x.at<double>(0, 0);
+                double fit_cy = x.at<double>(1, 0);
+                double fit_c = x.at<double>(2, 0);
+                fitted_radius = std::sqrt(fit_cx * fit_cx + fit_cy * fit_cy + fit_c);
+                double dist = std::sqrt(std::pow(fit_cx - rough_center.x, 2) + std::pow(fit_cy - rough_center.y, 2));
+                if (dist < radius * 0.5) {
+                    center = cv::Point2d(fit_cx, fit_cy);
+                }
             }
         }
     }
@@ -1410,29 +1562,57 @@ cv::Point2d refineCircleCenter(const cv::Mat& gray, const cv::Point2d& rough_cen
         }
     }
 
-    // ===== 十字精定位: Hough 直线交点法 (主策略) =====
+    cv::Point2d circle_geo_center = center;
+
+    // ===== 十字精定位: 高斯拟合法 (主策略) =====
+    {
+        cv::Point2d gaussian_center = refineCrossCenterByGaussian(gray, center, radius);
+        double shift = std::sqrt(std::pow(gaussian_center.x - center.x, 2) +
+                                  std::pow(gaussian_center.y - center.y, 2));
+        if (shift > 0.01 && shift < radius * 0.3) {
+            double weight_circle = 0.4;
+            double weight_cross = 0.6;
+            center = cv::Point2d(
+                circle_geo_center.x * weight_circle + gaussian_center.x * weight_cross,
+                circle_geo_center.y * weight_circle + gaussian_center.y * weight_cross
+            );
+            return center;
+        }
+    }
+
+    // ===== 十字精定位: Hough 直线交点法 (回退策略一) =====
     {
         cv::Point2d hough_center = refineCrossCenterByHough(gray, center, radius);
         double shift = std::sqrt(std::pow(hough_center.x - center.x, 2) +
                                   std::pow(hough_center.y - center.y, 2));
         if (shift > 0.01 && shift < radius * 0.3) {
-            center = hough_center;
+            double weight_circle = 0.4;
+            double weight_cross = 0.6;
+            center = cv::Point2d(
+                circle_geo_center.x * weight_circle + hough_center.x * weight_cross,
+                circle_geo_center.y * weight_circle + hough_center.y * weight_cross
+            );
             return center;
         }
     }
 
-    // ===== 十字精定位: 白色区域质心法 (回退策略一) =====
+    // ===== 十字精定位: 白色区域质心法 (回退策略二) =====
     {
         cv::Point2d bright_centroid = refineCrossCenterByBrightCentroid(gray, center, radius);
         double shift = std::sqrt(std::pow(bright_centroid.x - center.x, 2) +
                                   std::pow(bright_centroid.y - center.y, 2));
         if (shift > 0.01 && shift < radius * 0.3) {
-            center = bright_centroid;
+            double weight_circle = 0.4;
+            double weight_cross = 0.6;
+            center = cv::Point2d(
+                circle_geo_center.x * weight_circle + bright_centroid.x * weight_cross,
+                circle_geo_center.y * weight_circle + bright_centroid.y * weight_cross
+            );
             return center;
         }
     }
 
-    // ===== 十字精定位: 改进投影法 (回退策略二) =====
+    // ===== 十字精定位: 改进投影法 (回退策略三) =====
     {
         int cross_roi_size = std::max(5, static_cast<int>(radius * 0.6));
         int crx0 = std::max(0, cvRound(center.x) - cross_roi_size);

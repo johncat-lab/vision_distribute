@@ -49,15 +49,15 @@ DetectorNode::DetectorConfig DetectorNode::loadConfig(const std::string& path) {
         LOG_WARN("[DetectorNode] 无法打开配置文件: %s", path.c_str());
         return cfg;
     }
-    if (fs["detector"].isDefined())       fs["detector"] >> cfg.detector;
-    if (fs["template_dir"].isDefined())   fs["template_dir"] >> cfg.template_dir;
-    if (fs["match_threshold"].isDefined())fs["match_threshold"] >> cfg.match_threshold;
-    if (fs["segment_mode"].isDefined())   fs["segment_mode"] >> cfg.segment_mode;
-    if (fs["v_threshold"].isDefined())    fs["v_threshold"] >> cfg.v_threshold;
-    if (fs["grad_threshold"].isDefined()) fs["grad_threshold"] >> cfg.grad_threshold;
-    if (fs["roi_y_center"].isDefined())   fs["roi_y_center"] >> cfg.roi_y_center;
-    if (fs["roi_y_margin"].isDefined())   fs["roi_y_margin"] >> cfg.roi_y_margin;
-    if (fs["enabled"].isDefined())        fs["enabled"] >> cfg.enabled;
+    if (!fs["detector"].empty())       fs["detector"] >> cfg.detector;
+    if (!fs["template_dir"].empty())   fs["template_dir"] >> cfg.template_dir;
+    if (!fs["match_threshold"].empty())fs["match_threshold"] >> cfg.match_threshold;
+    if (!fs["segment_mode"].empty())   fs["segment_mode"] >> cfg.segment_mode;
+    if (!fs["v_threshold"].empty())    fs["v_threshold"] >> cfg.v_threshold;
+    if (!fs["grad_threshold"].empty()) fs["grad_threshold"] >> cfg.grad_threshold;
+    if (!fs["roi_y_center"].empty())   fs["roi_y_center"] >> cfg.roi_y_center;
+    if (!fs["roi_y_margin"].empty())   fs["roi_y_margin"] >> cfg.roi_y_margin;
+    if (!fs["enabled"].empty())        fs["enabled"] >> cfg.enabled;
     fs.release();
     LOG_INFO("[DetectorNode] 已加载配置: detector=%s, threshold=%.2f",
              cfg.detector.c_str(), cfg.match_threshold);
@@ -92,9 +92,18 @@ void DetectorNode::initDataflow(NodeEdgeManager& edges,
     annotation_pub_ = edges.publish<AnnotationMsg>("annotation_output", "vision/annotation");
 
     // 设置帧回调
-    frame_sub_->setCallback([this](const FrameMsg& frame) {
+    frame_sub_->subscribe([this](const FrameMsg& frame) {
         this->processFrame(frame);
     });
+
+    // 保存配置文件路径供 start() 使用
+    detector_config_file_ = config_file;
+    
+    if (!detector_config_file_.empty()) {
+        LOG_INFO("[DetectorNode] 检测器配置文件: %s", detector_config_file_.c_str());
+    } else {
+        LOG_INFO("[DetectorNode] 未指定检测器配置文件，将使用默认值");
+    }
 
     LOG_INFO("[DetectorNode] 数据流通道已初始化");
 }
@@ -307,8 +316,8 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
 
 // ========== start ==========
 bool DetectorNode::start() {
-    // 默认使用 OpenCV 模板检测器
-    auto cfg = loadConfig("detector.xml");
+    // 使用 initDataflow 中保存的配置文件路径
+    auto cfg = loadConfig(detector_config_file_);
 
     try {
         if (cfg.detector == "yolo") {
@@ -316,16 +325,31 @@ bool DetectorNode::start() {
             detector_ = std::make_unique<YoloDetector>(cfg.model_path);
 #else
             LOG_WARN("[DetectorNode] 未启用 ONNX 支持，使用默认模板检测器");
-            detector_ = std::make_unique<OpencvTemplateDetector>(cfg.template_dir);
+            detector_ = std::make_unique<OpenCvTemplateDetector>(cfg.template_dir);
 #endif
         } else if (cfg.detector == "gradient") {
             detector_ = std::make_unique<EdgeGradientDetector>();
         } else if (cfg.detector == "conveyor") {
             detector_ = std::make_unique<ConveyorDetector>();
         } else {
-            detector_ = std::make_unique<OpencvTemplateDetector>(cfg.template_dir);
+            detector_ = std::make_unique<OpenCvTemplateDetector>(cfg.template_dir);
         }
-        detector_->setMatchThreshold(cfg.match_threshold);
+        // Detector 基类没有 setMatchThreshold，需要 dynamic_cast
+        if (auto* tpl = dynamic_cast<OpenCvTemplateDetector*>(detector_.get())) {
+            tpl->setMatchThreshold(cfg.match_threshold);
+            tpl->setSegmentMode(cfg.segment_mode);
+            tpl->setVThreshold(cfg.v_threshold);
+            tpl->setGradientThreshold(cfg.grad_threshold);
+            tpl->setRoiYCenter(cfg.roi_y_center);
+            tpl->setRoiYMargin(cfg.roi_y_margin);
+        }
+        
+        // 初始化检测器（加载模板等）
+        if (!detector_->init()) {
+            LOG_ERROR("[DetectorNode] 检测器初始化失败");
+            return false;
+        }
+        
         detector_enabled_ = cfg.enabled;
         detector_ready_ = true;
         LOG_INFO("[DetectorNode] 检测器已启动 (%s, threshold=%.2f)",
@@ -357,21 +381,49 @@ void DetectorNode::processFrame(const FrameMsg& frame) {
 
     // 解码帧 → 检测 → 发布
     try {
-        std::vector<DetectedObject> objects;
+        ObjectInfoList object_list;
         {
             std::lock_guard<std::mutex> lock(detector_mutex_);
-            objects = detector_->detect(frame);
+            // FrameMsg → Frame 转换
+            Frame frame_struct;
+            frame_struct.frameNum = frame.frame_num();
+            frame_struct.width = static_cast<unsigned short>(frame.width());
+            frame_struct.height = static_cast<unsigned short>(frame.height());
+            frame_struct.pixelType = frame.pixel_type();
+            // 将 Protobuf string 转为 vector<uint8_t>
+            const std::string& data_str = frame.data();
+            frame_struct.data.assign(data_str.begin(), data_str.end());
+            
+            object_list = detector_->detect(frame_struct);
         }
+        
+        const auto& objects = object_list.getObjects();
 
         DetectionMsg dmsg;
-        dmsg.camera_id = frame.camera_id;
-        dmsg.frame_num = frame.frame_num;
-        dmsg.timestamp = frame.timestamp;
-        dmsg.object_count = static_cast<uint32_t>(objects.size());
-
-        for (const auto& obj : objects) {
-            dmsg.objects.push_back(obj);
+        
+        // 填充 Protobuf 字段
+        dmsg.set_frame_num(frame.frame_num());
+        dmsg.set_timestamp(frame.timestamp());
+        dmsg.set_object_count(static_cast<int32_t>(objects.size()));
+        
+        // 构建协议字符串 (TA,x,y,a,t,...; 或 NG)
+        std::string protocol_str;
+        if (objects.empty()) {
+            protocol_str = "NG";
+        } else {
+            protocol_str = "TA";
+            for (const auto& obj : objects) {
+                protocol_str += "," + std::to_string(obj.getX()) + "," + std::to_string(obj.getY()) + 
+                               "," + std::to_string(obj.getAngle()) + "," + std::to_string(obj.getType());
+            }
         }
+        dmsg.set_protocol_string(protocol_str);
+        
+        // 填充其他字段
+        dmsg.set_frame_num(frame.frame_num());
+        dmsg.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+        dmsg.set_object_count(static_cast<int32_t>(objects.size()));
 
         {
             std::lock_guard<std::mutex> lock(detection_mutex_);
@@ -380,12 +432,38 @@ void DetectorNode::processFrame(const FrameMsg& frame) {
 
         if (detection_pub_) detection_pub_->publish(dmsg);
 
+        // 构建 AnnotationMsg
         AnnotationMsg amsg;
-        amsg.frame_num = frame.frame_num;
-        amsg.timestamp = frame.timestamp;
+        
+        // 填充 Protobuf 对象
+        amsg.set_frame_num(frame.frame_num());
+        amsg.set_timestamp(frame.timestamp());
+        amsg.set_template_width(0);  // 需要从配置获取
+        amsg.set_template_height(0); // 需要从配置获取
+        
         for (const auto& obj : objects) {
-            amsg.annotations.push_back(obj.label);
+            auto* proto_obj = amsg.proto_msg.add_objects();
+            proto_obj->set_x(obj.getX());
+            proto_obj->set_y(obj.getY());
+            proto_obj->set_angle(obj.getAngle());
+            proto_obj->set_score(0.0);  // ObjectInfo 没有 score 字段
+            proto_obj->set_type(obj.getType());
+            proto_obj->set_id(0);    // 根据实际需求设置
         }
+        
+        // 同步objects 到便捷访问结构
+        amsg.objects.clear();
+        for (const auto& proto_obj : amsg.proto_msg.objects()) {
+            AnnotationMsg::ObjectAnnotation ann_obj;
+            ann_obj.x = proto_obj.x();
+            ann_obj.y = proto_obj.y();
+            ann_obj.angle = proto_obj.angle();
+            ann_obj.score = proto_obj.score();
+            ann_obj.type = proto_obj.type();
+            ann_obj.id = proto_obj.id();
+            amsg.objects.push_back(ann_obj);
+        }
+        
         if (annotation_pub_) annotation_pub_->publish(amsg);
 
     } catch (const std::exception& e) {
@@ -398,17 +476,15 @@ ServiceResponse DetectorNode::handleGetResult(const ServiceRequest& req) {
     (void)req;
     ServiceResponse resp;
     std::lock_guard<std::mutex> lock(detection_mutex_);
-    if (latest_detection_.object_count == 0) {
-        resp.success = false;
-        resp.data = "暂无检测结果";
+    if (latest_detection_.object_count() == 0) {
+        resp.set_success(false);
+        resp.set_data("暂无检测结果");
     } else {
-        resp.success = true;
+        resp.set_success(true);
         std::ostringstream oss;
-        oss << "objects=" << latest_detection_.object_count;
-        for (const auto& obj : latest_detection_.objects) {
-            oss << " [" << obj.label << " conf=" << obj.confidence << "]";
-        }
-        resp.data = oss.str();
+        oss << "objects=" << latest_detection_.object_count();
+        oss << " protocol=" << latest_detection_.protocol_string();
+        resp.set_data(oss.str());
     }
     return resp;
 }
@@ -416,26 +492,26 @@ ServiceResponse DetectorNode::handleGetResult(const ServiceRequest& req) {
 ServiceResponse DetectorNode::handleGetConfig(const ServiceRequest& req) {
     (void)req;
     ServiceResponse resp;
-    resp.success = true;
+    resp.set_success(true);
     std::lock_guard<std::mutex> lock(detector_mutex_);
     if (detector_) {
-        resp.data = "threshold=" + std::to_string(detector_->getMatchThreshold());
+        resp.set_data("threshold=" + std::to_string(static_cast<OpenCvTemplateDetector*>(detector_.get())->getMatchThreshold()));
     } else {
-        resp.data = "detector not initialized";
+        resp.set_data("detector not initialized");
     }
     return resp;
 }
 
 ServiceResponse DetectorNode::handleOnOff(const ServiceRequest& req) {
     ServiceResponse resp;
-    if (req.payload == "on" || req.payload == "1" || req.payload == "true") {
+    if (req.payload() == "on" || req.payload() == "1" || req.payload() == "true") {
         detector_enabled_ = true;
-        resp.success = true;
-        resp.data = "检测器已启用";
+        resp.set_success(true);
+        resp.set_data("检测器已启用");
     } else {
         detector_enabled_ = false;
-        resp.success = true;
-        resp.data = "检测器已关闭";
+        resp.set_success(true);
+        resp.set_data("检测器已关闭");
     }
     return resp;
 }
@@ -443,19 +519,24 @@ ServiceResponse DetectorNode::handleOnOff(const ServiceRequest& req) {
 ServiceResponse DetectorNode::handleSetThreshold(const ServiceRequest& req) {
     ServiceResponse resp;
     try {
-        float th = std::stof(req.payload);
+        float th = std::stof(req.payload());
         std::lock_guard<std::mutex> lock(detector_mutex_);
         if (detector_) {
-            detector_->setMatchThreshold(th);
-            resp.success = true;
-            resp.data = "匹配阈值已设置: " + std::to_string(th);
+            if (auto* tpl = dynamic_cast<OpenCvTemplateDetector*>(detector_.get())) {
+                tpl->setMatchThreshold(th);
+                resp.set_success(true);
+                resp.set_data("匹配阈值已设置: " + std::to_string(th));
+            } else {
+                resp.set_success(false);
+                resp.set_data("不支持的检测器类型");
+            }
         } else {
-            resp.success = false;
-            resp.data = "检测器未初始化";
+            resp.set_success(false);
+            resp.set_data("检测器未初始化");
         }
     } catch (const std::exception& e) {
-        resp.success = false;
-        resp.data = std::string("参数错误: ") + e.what();
+        resp.set_success(false);
+        resp.set_data(std::string("参数错误: ") + e.what());
     }
     return resp;
 }
@@ -464,13 +545,13 @@ ServiceResponse DetectorNode::handleReloadTemplate(const ServiceRequest& req) {
     (void)req;
     ServiceResponse resp;
     std::lock_guard<std::mutex> lock(detector_mutex_);
-    if (auto* tpl = dynamic_cast<OpencvTemplateDetector*>(detector_.get())) {
-        tpl->reloadTemplates();
-        resp.success = true;
-        resp.data = "模板已重新加载";
+    if (auto* tpl = dynamic_cast<OpenCvTemplateDetector*>(detector_.get())) {
+        tpl->init();
+        resp.set_success(true);
+        resp.set_data("模板已重新加载");
     } else {
-        resp.success = false;
-        resp.data = "当前检测器类型不支持模板加载";
+        resp.set_success(false);
+        resp.set_data("当前检测器类型不支持模板加载");
     }
     return resp;
 }
@@ -478,17 +559,17 @@ ServiceResponse DetectorNode::handleReloadTemplate(const ServiceRequest& req) {
 ServiceResponse DetectorNode::handleSetVThreshold(const ServiceRequest& req) {
     ServiceResponse resp;
     try {
-        int v = std::stoi(req.payload);
+        int v = std::stoi(req.payload());
         std::lock_guard<std::mutex> lock(detector_mutex_);
-        if (auto* tpl = dynamic_cast<OpencvTemplateDetector*>(detector_.get())) {
+        if (auto* tpl = dynamic_cast<OpenCvTemplateDetector*>(detector_.get())) {
             // 调用对应方法 (示例)
             (void)v;
         }
-        resp.success = true;
-        resp.data = "颜色阈值已设置: " + req.payload;
+        resp.set_success(true);
+        resp.set_data("颜色阈值已设置: " + req.payload());
     } catch (const std::exception& e) {
-        resp.success = false;
-        resp.data = std::string("参数错误: ") + e.what();
+        resp.set_success(false);
+        resp.set_data(std::string("参数错误: ") + e.what());
     }
     return resp;
 }
@@ -496,19 +577,19 @@ ServiceResponse DetectorNode::handleSetVThreshold(const ServiceRequest& req) {
 ServiceResponse DetectorNode::handleSetGradThreshold(const ServiceRequest& req) {
     ServiceResponse resp;
     try {
-        int g = std::stoi(req.payload);
-        resp.success = true;
-        resp.data = "梯度阈值已设置: " + std::to_string(g);
+        int g = std::stoi(req.payload());
+        resp.set_success(true);
+        resp.set_data("梯度阈值已设置: " + std::to_string(g));
     } catch (const std::exception& e) {
-        resp.success = false;
-        resp.data = std::string("参数错误: ") + e.what();
+        resp.set_success(false);
+        resp.set_data(std::string("参数错误: ") + e.what());
     }
     return resp;
 }
 
 ServiceResponse DetectorNode::handleSetSegmentMode(const ServiceRequest& req) {
     ServiceResponse resp;
-    resp.success = true;
-    resp.data = "分割模式已设置: " + req.payload;
+    resp.set_success(true);
+    resp.set_data("分割模式已设置: " + req.payload());
     return resp;
 }

@@ -69,7 +69,9 @@ std::shared_ptr<IService<Req, Resp>> NodeFactory::createService(const std::strin
     switch (config_.transport) {
     case TransportType::ZEROMQ: {
         auto* ctx = static_cast<zmq::context_t*>(transport_context_);
-        return std::make_shared<ZmqService<Req, Resp>>(*ctx, name, config_.base_port);
+        // 使用配置中的 Worker 线程数
+        return std::make_shared<ZmqService<Req, Resp>>(
+            *ctx, name, config_.base_port, config_.zmq_service_workers);
     }
     case TransportType::ZENOH:
         return std::make_shared<ZenohService<Req, Resp>>(name);

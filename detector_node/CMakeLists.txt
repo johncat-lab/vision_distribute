@@ -1,5 +1,9 @@
+# ============================================================
+# 检测器节点 - 使用 NodeContainer V2 框架
+# ============================================================
 set(DETECTOR_SOURCES
     main.cpp
+    detector_node.cpp
     src/opencv_template_detector.cpp
     src/conveyor_detector.cpp
     src/edge_gradient_detector.cpp
@@ -18,10 +22,11 @@ endif()
 add_executable(detector_node ${DETECTOR_SOURCES})
 
 target_include_directories(detector_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(detector_node PRIVATE vision_logger vision_rpc ${OpenCV_LIBS})
+target_link_libraries(detector_node PRIVATE vision_logger vision_messages_proto vision_rpc vision_dag ${OpenCV_LIBS})
 
 if(rclcpp_FOUND)
     target_link_libraries(detector_node PRIVATE vision_interfaces__rosidl_typesupport_cpp)
@@ -34,44 +39,6 @@ if(USE_ONNX)
 endif()
 
 install(TARGETS detector_node RUNTIME DESTINATION detector_node)
-
-# ============================================================
-# 使用 NodeContainer 框架的新检测器节点版本
-# ============================================================
-set(DETECTOR_V2_SOURCES
-    main_new.cpp
-    detector_node.cpp
-    src/opencv_template_detector.cpp
-    src/conveyor_detector.cpp
-    src/edge_gradient_detector.cpp
-    src/ninepoint_detector.cpp
-    src/calibration_core.cpp
-)
-
-if(USE_ONNX)
-    list(APPEND DETECTOR_V2_SOURCES src/yolo_detector.cpp)
-endif()
-
-add_executable(detector_node_v2 ${DETECTOR_V2_SOURCES})
-
-target_include_directories(detector_node_v2 PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
-target_link_libraries(detector_node_v2 PRIVATE vision_logger vision_rpc vision_dag ${OpenCV_LIBS})
-
-if(rclcpp_FOUND)
-    target_link_libraries(detector_node_v2 PRIVATE vision_interfaces__rosidl_typesupport_cpp)
-endif()
-
-if(USE_ONNX)
-    target_compile_definitions(detector_node_v2 PRIVATE HAS_ONNX)
-    target_include_directories(detector_node_v2 PRIVATE ${ORT_INCLUDE_DIR})
-    target_link_libraries(detector_node_v2 PRIVATE ${ORT_LIB})
-endif()
-
-install(TARGETS detector_node_v2 RUNTIME DESTINATION detector_node)
 
 # 安装 detector_node 所需的配置文件
 install(FILES

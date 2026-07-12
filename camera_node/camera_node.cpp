@@ -38,6 +38,10 @@ CameraNode::CameraConfig CameraNode::loadCameraConfig(const std::string& path) {
                  path.c_str());
         return cfg;
     }
+    
+    // 加载相机类型 (新增)
+    fs["camera_type"] >> cfg.camera_type;
+    
     fs["camera_index"]  >> cfg.camera_index;
     fs["trigger_mode"]  >> cfg.trigger_mode;
     fs["pixel_format"]  >> cfg.pixel_format;
@@ -47,7 +51,9 @@ CameraNode::CameraConfig CameraNode::loadCameraConfig(const std::string& path) {
     fs["gain"]          >> cfg.gain;
     fs["frame_rate"]    >> cfg.frame_rate;
     fs.release();
-    LOG_INFO("[CameraNode] 相机配置已加载: %s", path.c_str());
+    
+    LOG_INFO("[CameraNode] 相机配置已加载: %s, 类型=%s", 
+             path.c_str(), cfg.camera_type.c_str());
     return cfg;
 }
 
@@ -246,71 +252,147 @@ void CameraNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
 
 // ========== start：打开相机并开始采集 ==========
 bool CameraNode::start() {
-    std::vector<MV_CC_DEVICE_INFO> raw_devices;
-    if (!camera_.enumDevices(raw_devices) || raw_devices.empty()) {
+    // 1. 根据配置创建相机实例
+    camera_ = CameraFactory::create(cam_cfg_.camera_type);
+    if (!camera_) {
+        LOG_ERROR("[CameraNode] 无法创建相机实例: %s", cam_cfg_.camera_type.c_str());
+        return false;
+    }
+    
+    // 2. 枚举设备
+    std::vector<CameraDeviceInfo> devices;
+    if (!camera_->enumDevices(devices) || devices.empty()) {
         LOG_WARN("[CameraNode] 未发现相机设备，将以未就绪状态运行");
         camera_ready_ = false;
         return true;
     }
-
-    LOG_INFO("[CameraNode] 发现 %d 个相机设备", raw_devices.size());
-    if (!camera_.open(cam_cfg_.camera_index)) {
-        LOG_ERROR("[CameraNode] 无法打开相机 (index=%d)", cam_cfg_.camera_index);
+    
+    LOG_INFO("[CameraNode] 发现 %zu 个相机设备", devices.size());
+    
+    // 3. 打开相机
+    if (!camera_->open(cam_cfg_.camera_index)) {
+        LOG_ERROR("[CameraNode] 无法打开相机 (type=%s, index=%d)", 
+                  cam_cfg_.camera_type.c_str(), cam_cfg_.camera_index);
         return false;
     }
-
-    camera_.setPixelFormat(cam_cfg_.pixel_format);
-
+    
+    // 4. 配置相机参数
+    camera_->setPixelFormat(cam_cfg_.pixel_format);
+    
     TriggerMode trig_mode;
     TriggerSource trig_source;
     parseTriggerMode(cam_cfg_.trigger_mode, trig_mode, trig_source);
-    camera_.setTriggerMode(trig_mode);
+    camera_->setTriggerMode(trig_mode);
     if (trig_mode == TriggerMode::ON) {
-        camera_.setTriggerSource(trig_source);
+        camera_->setTriggerSource(trig_source);
     }
-
+    
     auto expAuto = parseExposureAuto(cam_cfg_.exposure_auto);
-    camera_.setExposureAuto(expAuto);
+    camera_->setExposureAuto(expAuto);
     if (expAuto == ExposureAuto::OFF) {
-        camera_.setExposureTime(cam_cfg_.exposure_time);
+        camera_->setExposureTime(cam_cfg_.exposure_time);
     }
-
+    
     auto gainAuto = parseGainAuto(cam_cfg_.gain_auto);
-    camera_.setGainAuto(gainAuto);
+    camera_->setGainAuto(gainAuto);
     if (gainAuto == GainAuto::OFF) {
-        camera_.setGain(cam_cfg_.gain);
+        camera_->setGain(cam_cfg_.gain);
     }
-    camera_.setFrameRate(cam_cfg_.frame_rate);
-
-    // 设置图像回调
+    camera_->setFrameRate(cam_cfg_.frame_rate);
+    
+    // 5. 设置图像回调
     auto cam_cfg_copy = cam_cfg_;
-    camera_.setImageCallback([this, cam_cfg_copy](const FrameInfo& info) {
+    camera_->setImageCallback([this, cam_cfg_copy](const FrameInfo& info) {
         FrameMsg msg;
-        msg.camera_id = cam_cfg_copy.camera_index;
-        msg.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        msg.width = static_cast<uint16_t>(info.width);
-        msg.height = static_cast<uint16_t>(info.height);
-        msg.pixel_type = static_cast<uint32_t>(info.pixelType);
-        msg.frame_num = info.frameNum;
-        msg.exposure_time = info.exposureTime;
-        msg.gain = info.gain;
-        if (info.data && info.dataLen > 0) {
-            msg.data.assign(info.data, info.data + info.dataLen);
+        
+        // 纯 Protobuf 方式填充消息
+        msg.set_camera_id(cam_cfg_copy.camera_index);
+        msg.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+        msg.set_width(info.width);
+        msg.set_height(info.height);
+        
+        uint32_t pixel_type = info.pixelType;
+        std::string pixel_format_str;
+        
+        switch (info.pixelType) {
+            case 0x01080001: 
+                pixel_type = 1;
+                pixel_format_str = "Mono8";
+                break;
+            case 0x01100001: 
+                pixel_type = 2;
+                pixel_format_str = "Mono16";
+                break;
+            case 0x02180001: 
+                pixel_type = 3;
+                pixel_format_str = "RGB8";
+                break;
+            case 0x02180008: 
+                pixel_type = 4;
+                pixel_format_str = "BGR8";
+                break;
+            case 0x02100002: 
+                pixel_type = 5;
+                pixel_format_str = "RGB16";
+                break;
+            case 0x02100010: 
+                pixel_type = 6;
+                pixel_format_str = "BGR16";
+                break;
+            case 0x02180002: 
+                pixel_type = 7;
+                pixel_format_str = "RGBA8";
+                break;
+            case 0x02180009: 
+                pixel_type = 8;
+                pixel_format_str = "BGRA8";
+                break;
+            case 0x01180003: 
+                pixel_type = 9;
+                pixel_format_str = "YUV422Packed";
+                break;
+            default:
+                pixel_type = 0;
+                pixel_format_str = "Unknown";
+                break;
         }
+        
+        msg.set_pixel_type(pixel_type);
+        msg.set_frame_num(info.frameNum);
+        msg.set_exposure_time(info.exposureTime);
+        msg.set_gain(info.gain);
+        if (info.data && info.dataLen > 0) {
+            msg.set_data(std::string(
+                reinterpret_cast<const char*>(info.data),
+                info.dataLen
+            ));
+        }
+        LOG_DEBUG("receive frame here: %dx%d, format=%s (SDK=%u, type=%u)", 
+                 info.width, info.height, pixel_format_str.c_str(), info.pixelType, pixel_type); 
         if (frame_pub_) frame_pub_->publish(msg);
     });
 
+    // 6. 开始取流
+    if (!camera_->startGrabbing()) {
+        LOG_ERROR("[CameraNode] 无法开始取流");
+        camera_->close();
+        return false;
+    }
+
     camera_ready_ = true;
-    LOG_INFO("[CameraNode] 相机启动完成，开始采集");
+    LOG_INFO("[CameraNode] 相机启动完成，开始采集 (type=%s)", cam_cfg_.camera_type.c_str());
     return true;
 }
 
 // ========== stop：关闭相机 ==========
 void CameraNode::stop() {
     if (camera_ready_.exchange(false)) {
-        camera_.close();
-        LOG_INFO("[CameraNode] 相机已关闭");
+        if (camera_) {
+            camera_->stopGrabbing();
+            camera_->close();
+            LOG_INFO("[CameraNode] 相机已关闭");
+        }
     }
 }
 
@@ -325,88 +407,88 @@ void CameraNode::tick(std::atomic<bool>& running) {
 // ========== 服务端点处理函数 ==========
 ServiceResponse CameraNode::handleSetExposure(const ServiceRequest& req) {
     ServiceResponse resp;
-    if (!camera_ready_) {
-        resp.success = false;
-        resp.data = "相机未就绪";
+    if (!camera_ready_ || !camera_) {
+        resp.set_success(false);
+        resp.set_data("相机未就绪");
         return resp;
     }
     std::lock_guard<std::mutex> lock(camera_mutex_);
     try {
-        float exposure = std::stof(req.payload);
-        if (camera_.setExposureTime(exposure)) {
+        float exposure = std::stof(req.payload());
+        if (camera_->setExposureTime(exposure)) {
             cam_cfg_.exposure_time = exposure;
-            resp.success = true;
-            resp.data = "曝光时间已设置: " + std::to_string(static_cast<int>(exposure));
+            resp.set_success(true);
+            resp.set_data("曝光时间已设置: " + std::to_string(static_cast<int>(exposure)));
         } else {
-            resp.success = false;
-            resp.data = "设置曝光时间失败";
+            resp.set_success(false);
+            resp.set_data("设置曝光时间失败");
         }
     } catch (const std::exception& e) {
-        resp.success = false;
-        resp.data = std::string("参数错误: ") + e.what();
+        resp.set_success(false);
+        resp.set_data(std::string("参数错误: ") + e.what());
     }
     return resp;
 }
 
 ServiceResponse CameraNode::handleSetGain(const ServiceRequest& req) {
     ServiceResponse resp;
-    if (!camera_ready_) {
-        resp.success = false;
-        resp.data = "相机未就绪";
+    if (!camera_ready_ || !camera_) {
+        resp.set_success(false);
+        resp.set_data("相机未就绪");
         return resp;
     }
     std::lock_guard<std::mutex> lock(camera_mutex_);
     try {
-        float gain = std::stof(req.payload);
-        if (camera_.setGain(gain)) {
+        float gain = std::stof(req.payload());
+        if (camera_->setGain(gain)) {
             cam_cfg_.gain = gain;
-            resp.success = true;
-            resp.data = "增益已设置: " + std::to_string(gain);
+            resp.set_success(true);
+            resp.set_data("增益已设置: " + std::to_string(gain));
         } else {
-            resp.success = false;
-            resp.data = "设置增益失败";
+            resp.set_success(false);
+            resp.set_data("设置增益失败");
         }
     } catch (const std::exception& e) {
-        resp.success = false;
-        resp.data = std::string("参数错误: ") + e.what();
+        resp.set_success(false);
+        resp.set_data(std::string("参数错误: ") + e.what());
     }
     return resp;
 }
 
 ServiceResponse CameraNode::handleSetTriggerMode(const ServiceRequest& req) {
     ServiceResponse resp;
-    if (!camera_ready_) {
-        resp.success = false;
-        resp.data = "相机未就绪";
+    if (!camera_ready_ || !camera_) {
+        resp.set_success(false);
+        resp.set_data("相机未就绪");
         return resp;
     }
     std::lock_guard<std::mutex> lock(camera_mutex_);
     TriggerMode mode;
     TriggerSource source;
-    parseTriggerMode(req.payload, mode, source);
-    camera_.setTriggerMode(mode);
-    if (mode == TriggerMode::ON) camera_.setTriggerSource(source);
-    cam_cfg_.trigger_mode = req.payload;
-    resp.success = true;
-    resp.data = "触发模式已设置: " + req.payload;
+    parseTriggerMode(req.payload(), mode, source);
+    camera_->setTriggerMode(mode);
+    if (mode == TriggerMode::ON) camera_->setTriggerSource(source);
+    cam_cfg_.trigger_mode = req.payload();
+    resp.set_success(true);
+    resp.set_data("触发模式已设置: " + req.payload());
     return resp;
 }
 
 ServiceResponse CameraNode::handleSoftTrigger(const ServiceRequest& req) {
     (void)req;
     ServiceResponse resp;
-    if (!camera_ready_) {
-        resp.success = false;
-        resp.data = "相机未就绪";
+    if (!camera_ready_ || !camera_) {
+        resp.set_success(false);
+        resp.set_data("相机未就绪");
         return resp;
     }
     std::lock_guard<std::mutex> lock(camera_mutex_);
-    if (camera_.triggerSoftware()) {
-        resp.success = true;
-        resp.data = "软触发成功";
+    if (camera_->triggerSoftware()) {
+        resp.set_success(true);
+        resp.set_data("软触发成功");
     } else {
-        resp.success = false;
-        resp.data = "软触发失败";
+        resp.set_success(false);
+        resp.set_data("软触发失败");
     }
     return resp;
 }
@@ -421,7 +503,7 @@ ServiceResponse CameraNode::handleGetConfig(const ServiceRequest& req) {
         << " gain=" << cam_cfg_.gain
         << " trigger_mode=" << cam_cfg_.trigger_mode
         << " frame_rate=" << cam_cfg_.frame_rate;
-    resp.success = true;
-    resp.data = oss.str();
+    resp.set_success(true);
+    resp.set_data(oss.str());
     return resp;
 }

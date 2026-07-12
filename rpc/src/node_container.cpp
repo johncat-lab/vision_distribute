@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <sstream>
+#include <unistd.h>  // getppid()
 
 namespace {
 // 全局指针，供信号处理器使用
@@ -33,7 +34,7 @@ int NodeContainer::run(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--describe") {
             NodeManifest m = node_->describe();
-            std::cout << m.toJsonString() << std::endl;
+            std::cout << m.toJson() << std::endl;
             return 0;
         }
     }
@@ -43,6 +44,10 @@ int NodeContainer::run(int argc, char* argv[]) {
         std::cerr << "[NodeContainer] 参数解析失败" << std::endl;
         return 1;
     }
+
+    // 2b) 记录父进程 PID (用于检测孤儿化)
+    pid_t parent_pid = getppid();
+    LOG_INFO("[NodeContainer] 父进程 PID=%d", parent_pid);
 
     // 3) 安装信号
     std::signal(SIGINT, nodeContainerSignalHandler);
@@ -96,8 +101,27 @@ int NodeContainer::run(int argc, char* argv[]) {
     }
     LOG_INFO("[NodeContainer] %s 已启动", node_->describe().name.c_str());
 
-    // 8) 主循环：调用节点 tick()
-    node_->tick(running_);
+    // 8) 主循环：调用节点 tick() + 父进程检测
+    while (running_) {
+        // 检测父进程是否退出 (孤儿化检测)
+        pid_t current_parent = getppid();
+        if (current_parent != parent_pid) {
+            LOG_WARN("[NodeContainer] 检测到父进程已退出 (PID %d -> %d)", 
+                     parent_pid, current_parent);
+            LOG_WARN("[NodeContainer] 节点将在 3 秒后自动退出...");
+            
+            // 给 3 秒时间清理
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            running_ = false;
+            break;
+        }
+        
+        // 执行节点主循环
+        node_->tick(running_);
+        
+        // 短暂休眠，避免 CPU 空转
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     // 9) 停止
     LOG_INFO("[NodeContainer] %s 正在停止...", node_->describe().name.c_str());
@@ -113,6 +137,22 @@ void NodeContainer::stop() {
 
 void NodeContainer::tickOnce() {
     node_->tick(running_);
+}
+
+std::shared_ptr<IService<ServiceRequest, ServiceResponse>>
+NodeContainer::createServiceClient(const std::string& service_name) {
+    if (!factory_) {
+        LOG_ERROR("[NodeContainer] createServiceClient: factory_ 未初始化");
+        return nullptr;
+    }
+    auto client = factory_->createService<ServiceRequest, ServiceResponse>(service_name);
+    if (client) {
+        service_instances_.push_back(client);
+        LOG_INFO("[NodeContainer] 已创建 service client: '%s'", service_name.c_str());
+    } else {
+        LOG_ERROR("[NodeContainer] 无法创建 service client: '%s'", service_name.c_str());
+    }
+    return client;
 }
 
 bool NodeContainer::parseArgs(int argc, char* argv[]) {
@@ -200,7 +240,7 @@ void NodeContainer::bridgeServices() {
                     [this, ep_name](const ServiceRequest& req) -> ServiceResponse {
                         // 将请求转发给 ServiceEndpointRegistry 统一处理
                         ServiceRequest routed_req = req;
-                        routed_req.endpoint = ep_name;
+                        routed_req.set_endpoint(ep_name);
                         return services_->handle(ep_name, routed_req);
                     });
                 endpoint_count++;

@@ -2,7 +2,8 @@
 #include "rpc/node_base.h"
 #include "rpc/node_container.h"
 #include "rpc/message_types.h"
-#include <hik_camera.h>  // HikCamera 封装
+#include <icamera.h>           // 相机抽象接口
+#include <camera_factory.h>    // 相机工厂
 #include <string>
 #include <memory>
 #include <mutex>
@@ -35,6 +36,7 @@ public:
 private:
     // 相机配置结构体
     struct CameraConfig {
+        std::string camera_type = "hik";  // 相机类型 ("hik", "basler", ...)
         int camera_index = 0;
         std::string trigger_mode = "continuous";
         std::string pixel_format = "Mono8";
@@ -49,7 +51,7 @@ private:
     static CameraConfig loadCameraConfig(const std::string& path);
 
     // 相机与数据访问
-    HikCamera camera_;
+    std::unique_ptr<ICamera> camera_;  // 使用抽象接口，通过工厂创建
     std::atomic<bool> camera_ready_{false};
     std::mutex camera_mutex_;
     CameraConfig cam_cfg_;

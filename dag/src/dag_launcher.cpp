@@ -275,6 +275,11 @@ bool DagLauncher::launchNode(const NodeLaunchConfig& config, NodeRuntimeState& s
     }
 
     if (pid == 0) {
+        fs::path binary_dir = fs::path(config.binary_path).parent_path();
+        if (!binary_dir.empty()) {
+            chdir(binary_dir.c_str());
+        }
+        
         std::vector<char*> c_args;
         c_args.reserve(args.size() + 1);
         for (auto& a : args) {
@@ -380,15 +385,95 @@ void DagLauncher::waitForAll() {
 }
 
 void DagLauncher::stop() {
-    LOG_INFO("[DagLauncher] 发送 SIGTERM 停止所有节点");
-    std::lock_guard<std::mutex> lock(states_mutex_);
-    for (auto& [name, state] : states_) {
-        if (state.pid > 0 && state.status == NodeRuntimeStatus::RUNNING) {
-            kill(state.pid, SIGTERM);
-            state.status = NodeRuntimeStatus::PENDING;
+    if (!running_.load()) {
+        LOG_INFO("[DagLauncher] stop() 被重复调用，忽略");
+        return;
+    }
+    
+    LOG_INFO("[DagLauncher] 正在停止所有节点...");
+    
+    // 1) 发送 SIGTERM 给所有运行中的节点
+    {
+        std::lock_guard<std::mutex> lock(states_mutex_);
+        for (auto& [name, state] : states_) {
+            if (state.pid > 0 && state.status == NodeRuntimeStatus::RUNNING) {
+                LOG_INFO("[DagLauncher] 发送 SIGTERM 到 %s (PID=%d)", 
+                         name.c_str(), state.pid);
+                kill(state.pid, SIGTERM);
+                state.status = NodeRuntimeStatus::PENDING;  // 标记为正在停止
+            }
         }
     }
+    
+    // 2) 等待子进程优雅退出 (超时5秒)
+    const int TIMEOUT_MS = 5000;
+    const int CHECK_INTERVAL_MS = 100;
+    int elapsed_ms = 0;
+    
+    while (elapsed_ms < TIMEOUT_MS) {
+        bool all_exited = true;
+        
+        {
+            std::lock_guard<std::mutex> lock(states_mutex_);
+            for (auto& [name, state] : states_) {
+                if (state.pid > 0) {
+                    // 检查进程是否已退出
+                    int wstatus;
+                    pid_t result = waitpid(state.pid, &wstatus, WNOHANG);
+                    if (result > 0) {
+                        // 进程已退出，回收
+                        state.pid = 0;
+                        if (WIFEXITED(wstatus)) {
+                            state.exit_code = WEXITSTATUS(wstatus);
+                            state.status = (state.exit_code == 0) 
+                                           ? NodeRuntimeStatus::EXITED 
+                                           : NodeRuntimeStatus::CRASHED;
+                        } else {
+                            state.status = NodeRuntimeStatus::EXITED;
+                        }
+                        LOG_INFO("[DagLauncher] %s 已退出 (code=%d)", name.c_str(), state.exit_code);
+                    } else if (result == 0) {
+                        // 进程仍在运行
+                        all_exited = false;
+                    } else {
+                        // waitpid 错误，进程可能已不存在
+                        state.pid = 0;
+                        state.status = NodeRuntimeStatus::EXITED;
+                    }
+                }
+            }
+        }
+        
+        if (all_exited) {
+            LOG_INFO("[DagLauncher] 所有节点已优雅退出 (%dms)", elapsed_ms);
+            break;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+        elapsed_ms += CHECK_INTERVAL_MS;
+    }
+    
+    // 3) 超时后强制 kill
+    if (elapsed_ms >= TIMEOUT_MS) {
+        LOG_WARN("[DagLauncher] 等待超时 (%dms)，强制终止剩余节点", TIMEOUT_MS);
+        std::lock_guard<std::mutex> lock(states_mutex_);
+        for (auto& [name, state] : states_) {
+            if (state.pid > 0) {
+                LOG_WARN("[DagLauncher] 强制 kill %s (PID=%d)", 
+                         name.c_str(), state.pid);
+                kill(state.pid, SIGKILL);
+                
+                // 等待回收
+                int wstatus;
+                waitpid(state.pid, &wstatus, 0);
+                state.pid = 0;
+                state.status = NodeRuntimeStatus::EXITED;
+            }
+        }
+    }
+    
     running_ = false;
+    LOG_INFO("[DagLauncher] 所有节点已停止");
 }
 
 void DagLauncher::forceKill() {
@@ -658,7 +743,7 @@ NodeResourceUsage DagLauncher::getResourceUsage(const std::string& instance_name
             pos = next + 1;
         }
         long ticks = utime + stime;
-        long hz = sysconf(_SC_CLK_TCK;
+        long hz = sysconf(_SC_CLK_TCK);
         long uptime_sec = (starttime / hz);
         if (hz > 0) {
             long elapsed = std::chrono::duration_cast<std::chrono::seconds>(

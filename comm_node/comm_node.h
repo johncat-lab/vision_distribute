@@ -46,6 +46,9 @@ private:
     std::unique_ptr<TcpClient> client_;
     std::mutex comm_mutex_;
     CommConfig cfg_;
+    
+    // 配置文件路径
+    std::string comm_config_file_;
 
     // 最近收到的检测结果
     DetectionMsg latest_detection_;

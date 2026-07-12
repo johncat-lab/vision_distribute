@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package vision.messages.detection;
+
+option cc_generic_services = false;
+
+/**
+ * @message DetectionMsg
+ * @brief 检测结果消息
+ * @owner 检测模块开发人员
+ * @version 1.0
+ */
+message DetectionMsg {
+    string protocol_string = 1;       // 协议字符串 (TA,x,y,a,t)
+    uint32 frame_num = 2;             // 对应的帧序号
+    int64 timestamp = 3;              // 检测时间戳（毫秒）
+    int32 object_count = 4;           // 检测到的物体数量
+}

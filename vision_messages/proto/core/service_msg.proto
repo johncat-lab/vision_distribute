@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package vision.messages.core;
+
+option cc_generic_services = false;
+
+/**
+ * @message ServiceRequest
+ * @brief 通用服务请求
+ * @owner 框架维护者
+ * @version 1.0
+ */
+message ServiceRequest {
+    string endpoint = 1;              // 服务端点名
+    string payload = 2;               // 请求参数
+}
+
+/**
+ * @message ServiceResponse
+ * @brief 通用服务响应
+ * @owner 框架维护者
+ * @version 1.0
+ */
+message ServiceResponse {
+    bool success = 1;                 // 是否成功
+    string data = 2;                  // 响应数据
+}

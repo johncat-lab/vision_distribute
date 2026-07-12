@@ -1014,13 +1014,13 @@ ObjectInfoList OpenCvTemplateDetector::detect(const Frame& frame) {
     last_best_score_ = 0.0;
 
     if (candidates.empty()) {
-        auto t_total_end = std::chrono::high_resolution_clock::now();
-        double total_ms = std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count();
-        std::cout << "[模版检测] 检测耗时: 总计=" << total_ms << "ms "
-                  << "(分割=" << seg_ms << "ms, 匹配=0ms, NMS=0ms) "
-                  << "候选=0 匹配=0" << std::endl;
-        last_results_.clear();
-        return result;
+        std::cout << "[模版检测] 未找到候选区域，使用全图搜索" << std::endl;
+        cv::Rect full_roi(0, 0, img_w, img_h);
+        candidates.push_back(full_roi);
+    } else if (candidates.size() == 1) {
+        std::cout << "[模版检测] 候选区域过少(1个)，添加全图搜索作为补充" << std::endl;
+        cv::Rect full_roi(0, 0, img_w, img_h);
+        candidates.push_back(full_roi);
     }
 
     // 2. 准备匹配用图像

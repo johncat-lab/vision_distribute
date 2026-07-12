@@ -1,0 +1,147 @@
+<?xml version="1.0"?>
+<!--
+  DAG 调度实例：完整的视觉检测流水线
+  
+  流水线架构：
+  ┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+  │ camera_node │─────>│ detector_node│─────>│  comm_node  │
+  │  (图像采集)  │ Frame│  (目标检测)   │ Det  │  (通信上传)  │
+  └─────────────┘      └──────────────┘      └─────────────┘
+                           │
+                           │ Annotation
+                           ↓
+                    (可选：可视化节点)
+  
+  使用方式：
+  ./build/install/bins/dag_launcher/dag_launcher config/dag_example.xml
+-->
+<pipeline>
+
+<!-- ========== 节点模板定义 ========== -->
+<templates>
+  
+  <!-- 相机节点模板 -->
+  <template name="camera_node">
+    <binary>camera_node</binary>
+    <out port="frame_output" type="FrameMsg"/>
+    <service role="camera"
+             endpoints="set_exposure,set_gain,set_trigger_mode,soft_trigger,get_config"/>
+  </template>
+
+  <!-- 检测器节点模板 -->
+  <template name="detector_node">
+    <binary>detector_node</binary>
+    <in  port="frame_input"       type="FrameMsg"/>
+    <out port="detection_output"  type="DetectionMsg"/>
+    <out port="annotation_output" type="AnnotationMsg"/>
+    <service role="detector"
+             endpoints="get_result,get_config,onoff,set_threshold,reload_template"/>
+  </template>
+
+  <!-- 通信节点模板 -->
+  <template name="comm_node">
+    <binary>comm_node</binary>
+    <in  port="detection_input" type="DetectionMsg"/>
+    <service role="comm" endpoints="set_config,get_config,get_status"/>
+  </template>
+
+</templates>
+
+<!-- ========== 节点实例化 ========== -->
+<instances>
+  
+  <!-- 实例 1：左侧相机 -->
+  <instance name="camera_left" template="camera_node">
+    <config>camera_config.xml</config>
+    <!-- 可以在这里覆盖默认配置 -->
+    <param name="camera_index" value="0"/>
+    <param name="exposure_time" value="5000"/>
+    <param name="gain" value="10"/>
+  </instance>
+
+  <!-- 实例 2：左侧检测器 -->
+  <instance name="detector_left" template="detector_node">
+    <config>detector.xml</config>
+    <param name="detector_type" value="opencv_template"/>
+    <param name="threshold" value="0.85"/>
+  </instance>
+
+  <!-- 实例 3：通信节点 -->
+  <instance name="communication" template="comm_node">
+    <config>communication.xml</config>
+    <param name="server_ip" value="192.168.1.100"/>
+    <param name="server_port" value="8080"/>
+  </instance>
+
+</instances>
+
+<!-- ========== 数据流连线 ========== -->
+<wiring>
+  
+  <!-- 连线 1：相机 → 检测器 -->
+  <wire from="camera_left"    
+        from_port="frame_output"
+        to="detector_left"    
+        to_port="frame_input"
+        topic="camera_left/frame"/>
+
+  <!-- 连线 2：检测器 → 通信节点 -->
+  <wire from="detector_left"  
+        from_port="detection_output"
+        to="communication"    
+        to_port="detection_input"
+        topic="detector_left/result"/>
+
+  <!-- 
+  可选连线 3：检测器标注输出 → 可视化节点（如果有的话）
+  <wire from="detector_left"  
+        from_port="annotation_output"
+        to="visualizer"       
+        to_port="annotation_input"
+        topic="detector_left/annotation"/>
+  -->
+
+</wiring>
+
+<!-- ========== 启动顺序控制 ========== -->
+<startup>
+  <!-- 
+    按顺序启动节点：
+    1. 先启动相机（数据源）
+    2. 再启动检测器（数据处理）
+    3. 最后启动通信（数据上传）
+  -->
+  <order>
+    <step>camera_left</step>
+    <step>detector_left</step>
+    <step>communication</step>
+  </order>
+  
+  <!-- 启动间隔（毫秒） -->
+  <delay_ms>500</delay_ms>
+</startup>
+
+<!-- ========== 服务路由配置 ========== -->
+<service_routing>
+  <!-- 
+    将内部服务端口映射到外部可访问的路由
+    格式：/节点角色/端点名 → 实际服务
+  -->
+  <route path="/camera/set_exposure" 
+         target="camera_left" 
+         endpoint="set_exposure"/>
+  
+  <route path="/camera/set_gain" 
+         target="camera_left" 
+         endpoint="set_gain"/>
+  
+  <route path="/detector/get_result" 
+         target="detector_left" 
+         endpoint="get_result"/>
+  
+  <route path="/comm/get_status" 
+         target="communication" 
+         endpoint="get_status"/>
+</service_routing>
+
+</pipeline>

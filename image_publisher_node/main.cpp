@@ -76,22 +76,43 @@ static ImagePublisherConfig loadPublisherConfig(const std::string& path) {
         return cfg;
     }
 
-    fs["image_dir"]    >> cfg.image_dir;
-    fs["fps"]          >> cfg.fps;
-    fs["loop"]         >> cfg.loop;
-    fs["camera_id"]    >> cfg.camera_id;
-    fs["pixel_format"] >> cfg.pixel_format;
+    if (!fs["image_dir"].empty()) {
+        fs["image_dir"] >> cfg.image_dir;
+        LOG_INFO("[ImagePublisher] image_dir: %s", cfg.image_dir.c_str());
+    }
+    
+    if (!fs["fps"].empty()) {
+        fs["fps"] >> cfg.fps;
+    }
+    
+    if (!fs["loop"].empty()) {
+        fs["loop"] >> cfg.loop;
+    }
+    
+    if (!fs["camera_id"].empty()) {
+        fs["camera_id"] >> cfg.camera_id;
+    }
+    
+    if (!fs["pixel_format"].empty()) {
+        fs["pixel_format"] >> cfg.pixel_format;
+    }
 
-    // 加载文件列表（可选）
     cv::FileNode file_list_node = fs["image_files"];
     if (file_list_node.type() == cv::FileNode::SEQ) {
+        LOG_INFO("[ImagePublisher] 找到 image_files 序列");
         for (const auto& node : file_list_node) {
             std::string file_path;
             node >> file_path;
+            LOG_INFO("[ImagePublisher] 文件: '%s'", file_path.c_str());
             if (!file_path.empty()) {
                 cfg.image_files.push_back(file_path);
             }
         }
+        LOG_INFO("[ImagePublisher] 共加载 %zu 个文件", cfg.image_files.size());
+    } else if (!file_list_node.empty()) {
+        LOG_INFO("[ImagePublisher] image_files 不是序列类型, type=%d", file_list_node.type());
+    } else {
+        LOG_INFO("[ImagePublisher] image_files 为空");
     }
 
     fs.release();
@@ -126,6 +147,7 @@ static NodeManifest buildManifest() {
 // ========== 主函数 ==========
 int main(int argc, char* argv[]) {
     std::string config_path;
+    std::string system_config_path;
     std::string pub_config_path;
 
     for (int i = 1; i < argc; ++i) {
@@ -135,35 +157,41 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
+            pub_config_path = config_path;
+        } else if (arg == "--system-config" && i + 1 < argc) {
+            system_config_path = argv[++i];
         } else if (arg == "--pub-config" && i + 1 < argc) {
             pub_config_path = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "用法: " << argv[0]
-                      << " --config <system_config.xml>"
-                      << " --pub-config <image_publisher_config.xml>" << std::endl;
+                      << " --config <image_publisher_config.xml>" << std::endl;
             return 0;
         }
     }
 
-    if (config_path.empty()) {
-        LOG_ERROR("[ImagePublisher] 未指定系统配置文件");
+    if (pub_config_path.empty()) {
+        LOG_ERROR("[ImagePublisher] 未指定配置文件");
         std::cerr << "用法: " << argv[0]
-                  << " --config <system_config.xml>"
-                  << " --pub-config <image_publisher_config.xml>" << std::endl;
+                  << " --config <image_publisher_config.xml>" << std::endl;
         return 1;
     }
 
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    // ---- 加载系统配置 ----
     NodeConfig node_config;
     try {
-        node_config = ConfigLoader::loadSystemConfig(config_path);
+        if (!system_config_path.empty()) {
+            node_config = ConfigLoader::loadSystemConfig(system_config_path);
+        } else {
+            node_config.transport = TransportType::ZEROMQ;
+            LOG_INFO("[ImagePublisher] 未指定系统配置，使用默认 ZeroMQ");
+        }
         node_config.node_name = "image_publisher_node";
     } catch (const std::exception& e) {
-        LOG_ERROR("[ImagePublisher] 加载系统配置失败: %s", e.what());
-        return 1;
+        LOG_ERROR("[ImagePublisher] 加载系统配置失败: %s，使用默认配置", e.what());
+        node_config.transport = TransportType::ZEROMQ;
+        node_config.node_name = "image_publisher_node";
     }
 
     std::string transport_name;
@@ -174,14 +202,8 @@ int main(int argc, char* argv[]) {
     }
     LOG_INFO("[ImagePublisher] 传输方式: %s", transport_name.c_str());
 
-    // ---- 加载发布器配置 ----
-    ImagePublisherConfig pub_cfg;
-    if (!pub_config_path.empty()) {
-        pub_cfg = loadPublisherConfig(pub_config_path);
-        LOG_INFO("[ImagePublisher] 发布器配置已加载: %s", pub_config_path.c_str());
-    } else {
-        LOG_INFO("[ImagePublisher] 未指定发布器配置，使用默认值");
-    }
+    ImagePublisherConfig pub_cfg = loadPublisherConfig(pub_config_path);
+    LOG_INFO("[ImagePublisher] 发布器配置已加载: %s", pub_config_path.c_str());
 
     // ---- 收集图像文件 ----
     std::vector<std::string> image_paths;
@@ -246,8 +268,10 @@ int main(int argc, char* argv[]) {
 
         // 如果是多通道图像，转换为单通道（Mono8）
         cv::Mat gray;
+        bool converted_to_gray = false;
         if (img.channels() == 3 || img.channels() == 4) {
             cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+            converted_to_gray = true;
         } else {
             gray = img;
         }
@@ -259,33 +283,35 @@ int main(int argc, char* argv[]) {
 
         // 构造 FrameMsg
         FrameMsg msg;
-        msg.camera_id = pub_cfg.camera_id;
-        msg.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        msg.width  = static_cast<uint16_t>(gray.cols);
-        msg.height = static_cast<uint16_t>(gray.rows);
-        msg.pixel_type = pixel_type;
-        msg.frame_num = frame_num++;
-        msg.exposure_time = 0.0f;
-        msg.gain = 0.0f;
+        msg.set_camera_id(pub_cfg.camera_id);
+        msg.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+        msg.set_width(static_cast<uint16_t>(gray.cols));
+        msg.set_height(static_cast<uint16_t>(gray.rows));
+        // 发送灰度图时，强制使用 Mono8 像素格式
+        msg.set_pixel_type(0x01080001);
+        msg.set_frame_num(frame_num++);
+        msg.set_exposure_time(0.0f);
+        msg.set_gain(0.0f);
 
         // 复制像素数据（行连续存储）
         size_t data_size = static_cast<size_t>(gray.rows) * static_cast<size_t>(gray.cols);
-        msg.data.resize(data_size);
+        std::string data_str(data_size, '\0');
         if (gray.isContinuous()) {
-            std::memcpy(msg.data.data(), gray.data, data_size);
+            std::memcpy(&data_str[0], gray.data, data_size);
         } else {
             for (int r = 0; r < gray.rows; ++r) {
-                std::memcpy(msg.data.data() + r * gray.cols,
+                std::memcpy(&data_str[0] + r * gray.cols,
                             gray.ptr(r), gray.cols);
             }
         }
+        msg.set_data(data_str);
 
         frame_pub->publish(msg);
 
         LOG_DEBUG("[ImagePublisher] 发布帧 #%u: %s (%ux%u, %zu bytes)",
-                  msg.frame_num, fs::path(img_path).filename().c_str(),
-                  msg.width, msg.height, msg.data.size());
+                  msg.frame_num(), fs::path(img_path).filename().c_str(),
+                  msg.width(), msg.height(), msg.data().size());
 
         ++image_idx;
 

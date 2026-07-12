@@ -46,7 +46,7 @@ bool CommNode::saveConfig(const std::string& path, const CommConfig& cfg) {
     }
     fs << "mode" << cfg.mode;
     fs << "host" << cfg.host;
-    fs << "cfg.port";
+    fs << "port" << cfg.port;
     fs << "server_mode" << cfg.server_mode;
     fs << "interval_ms" << cfg.interval_ms;
     fs.release();
@@ -71,11 +71,20 @@ void CommNode::initDataflow(NodeEdgeManager& edges,
     edges.setDefaultTopic("detection_input", "vision/detection");
     detection_sub_ = edges.subscribe<DetectionMsg>("detection_input", "vision/detection");
 
-    detection_sub_->setCallback([this](const DetectionMsg& msg) {
+    detection_sub_->subscribe([this](const DetectionMsg& msg) {
         std::lock_guard<std::mutex> lock(detection_mutex_);
         latest_detection_ = msg;
         (void)msg;
     });
+
+    // 保存配置文件路径供 start() 使用
+    comm_config_file_ = config_file;
+    
+    if (!comm_config_file_.empty()) {
+        LOG_INFO("[CommNode] 通信配置文件: %s", comm_config_file_.c_str());
+    } else {
+        LOG_INFO("[CommNode] 未指定通信配置文件，将使用默认值");
+    }
 
     LOG_INFO("[CommNode] 数据流通道已初始化");
 }
@@ -164,7 +173,8 @@ void CommNode::initServices(ServiceEndpointRegistry& services, NodeContainer& co
 
 // ========== start ==========
 bool CommNode::start() {
-    cfg_ = loadConfig("communication.xml");
+    // 使用 initDataflow 中保存的配置文件路径
+    cfg_ = loadConfig(comm_config_file_);
 
     try {
         if (cfg_.mode == "client") {
@@ -197,22 +207,30 @@ void CommNode::tick(std::atomic<bool>& running) {
     while (running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(interval));
 
-        if (latest_detection_.object_count > 0) {
+        if (latest_detection_.object_count() > 0) {
             std::string result;
             {
                 std::lock_guard<std::mutex> lock(detection_mutex_);
                 std::ostringstream oss;
-                oss << "camera_id=" << latest_detection_.camera_id
-                     << " frame=" << latest_detection_.frame_num
-                     << " objects=" << latest_detection_.object_count;
-                for (const auto& obj : latest_detection_.objects) {
-                    oss << " [" << obj.label << " conf=" << obj.confidence << "]";
-                }
+                oss << "frame=" << latest_detection_.frame_num()
+                     << " objects=" << latest_detection_.object_count()
+                     << " protocol=" << latest_detection_.protocol_string();
                 result = oss.str();
             }
             std::lock_guard<std::mutex> lock(comm_mutex_);
-            if (server_) server_->sendToAll(result);
-            if (client_) client_->send(result);
+            if (server_) {
+                server_->updateResult(result);
+                if (cfg_.server_mode == 2) {
+                    LOG_DEBUG("[CommNode] 更新检测结果(请求模式): %s", result.c_str());
+                } else if (cfg_.server_mode == 3) {
+                    server_->broadcast(result + "\n");
+                    LOG_DEBUG("[CommNode] 通过服务器广播检测结果(周期模式): %s", result.c_str());
+                }
+            }
+            if (client_) {
+                client_->send(result + "\n");
+                LOG_DEBUG("[CommNode] 通过客户端发送检测结果: %s", result.c_str());
+            }
         }
     }
 }
@@ -220,8 +238,8 @@ void CommNode::tick(std::atomic<bool>& running) {
 // ========== 服务端点处理 ==========
 ServiceResponse CommNode::handleSetConfig(const ServiceRequest& req) {
     ServiceResponse resp;
-    resp.success = true;
-    resp.data = "配置已更新: " + req.payload;
+    resp.set_success(true);
+    resp.set_data("配置已更新: " + req.payload());
     return resp;
 }
 
@@ -231,19 +249,23 @@ ServiceResponse CommNode::handleGetConfig(const ServiceRequest& req) {
     std::ostringstream oss;
     oss << "mode=" << cfg_.mode << " host=" << cfg_.host
         << " port=" << cfg_.port << " interval_ms=" << cfg_.interval_ms;
-    resp.success = true;
-    resp.data = oss.str();
+    resp.set_success(true);
+    resp.set_data(oss.str());
     return resp;
 }
 
 ServiceResponse CommNode::handleGetStatus(const ServiceRequest& req) {
     (void)req;
     ServiceResponse resp;
-    resp.success = true;
+    resp.set_success(true);
     std::ostringstream oss;
     oss << "mode=" << cfg_.mode;
-    if (server_) oss << " server_running=1 clients=" << server_->clientCount();
-    if (client_) oss << " client_connected=" << (client_->isConnected() ? 1 : 0);
-    resp.data = oss.str();
+    if (server_) {
+        oss << " server_running=1 clients=" << server_->getClientCount();
+    }
+    if (client_) {
+        oss << " client_connected=" << (client_->isConnected() ? 1 : 0);
+    }
+    resp.set_data(oss.str());
     return resp;
 }

@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package vision.messages.detection;
+
+option cc_generic_services = false;
+
+/**
+ * @message ObjectAnnotation
+ * @brief 单个物体的标注信息
+ * @owner 检测模块开发人员
+ * @version 1.0
+ */
+message ObjectAnnotation {
+    double x = 1;                     // 中心X坐标（亚像素精度）
+    double y = 2;                     // 中心Y坐标（亚像素精度）
+    double angle = 3;                 // 旋转角度（度）
+    double score = 4;                 // 检测分数（0-1）
+    int32 type = 5;                   // 物体类型
+    int32 id = 6;                     // 物体ID（多目标区分）
+}
+
+/**
+ * @message AnnotationMsg
+ * @brief 标注消息（用于分布式绘制检测结果）
+ * @owner 检测模块开发人员
+ * @version 1.0
+ */
+message AnnotationMsg {
+    uint32 frame_num = 1;             // 对应的帧序号
+    int64 timestamp = 2;              // 时间戳（毫秒）
+    uint32 template_width = 3;        // 模板宽度
+    uint32 template_height = 4;       // 模板高度
+    repeated ObjectAnnotation objects = 5;  // 物体标注列表
+}

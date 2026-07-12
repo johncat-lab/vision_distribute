@@ -1,0 +1,142 @@
+<?xml version="1.0"?>
+<!--
+  DAG 调度实例：相机采集 + 检测器 + 通信流水线
+  
+  流水线架构：
+  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+  │ camera_node  │─────>│ detector_node│─────>│  comm_node   │
+  │  (相机采集)   │ Frame│  (目标检测)   │Detection│(TCP通信)    │
+  └──────────────┘      └──────────────┘      └──────────────┘
+                                                  │
+                                                  ↓
+                                             TCP Server(7930)
+  
+  使用方式：
+  ./build/install/bins/dag_launcher/dag_launcher --pipeline dag_camera_detector_comm.xml --bins-dir ..
+  
+  测试方式：
+  1. 查看检测结果：./build/install/bins/tests/test_detection_result
+  2. 通过TCP获取结果：echo "GET" | nc localhost 7930
+-->
+<pipeline>
+
+<templates>
+  
+  <template name="camera_node">
+    <binary>camera_node</binary>
+    <out port="frame_output" type="FrameMsg"/>
+    <service role="camera"
+             endpoints="set_exposure,set_gain,set_trigger_mode,soft_trigger,get_config"/>
+  </template>
+
+  <template name="detector_node">
+    <binary>detector_node</binary>
+    <in  port="frame_input"       type="FrameMsg"/>
+    <out port="detection_output"  type="DetectionMsg"/>
+    <out port="annotation_output" type="AnnotationMsg"/>
+    <service role="detector"
+             endpoints="get_result,get_config,onoff,set_threshold,reload_template"/>
+  </template>
+
+  <template name="comm_node">
+    <binary>comm_node</binary>
+    <in  port="detection_input" type="DetectionMsg"/>
+    <service role="comm"
+             endpoints="set_config,get_config,get_status"/>
+  </template>
+
+</templates>
+
+<instances>
+  
+  <instance name="camera" template="camera_node">
+    <config>camera_config.xml</config>
+  </instance>
+
+  <instance name="detector" template="detector_node">
+    <config>detector.xml</config>
+    <param name="enabled" value="1"/>
+  </instance>
+
+  <instance name="comm" template="comm_node">
+    <config>communication.xml</config>
+  </instance>
+
+</instances>
+
+<wiring>
+  
+  <wire from="camera"    
+        from_port="frame_output"
+        to="detector"    
+        to_port="frame_input"
+        topic="vision/frame"/>
+
+  <wire from="detector"
+        from_port="detection_output"
+        to="comm"
+        to_port="detection_input"
+        topic="vision/detection"/>
+
+</wiring>
+
+<startup>
+  <order>
+    <step>camera</step>
+    <step>detector</step>
+    <step>comm</step>
+  </order>
+  <delay_ms>500</delay_ms>
+</startup>
+
+<service_routing>
+  <route path="/camera/get_config" 
+         target="camera" 
+         endpoint="get_config"/>
+  
+  <route path="/camera/set_exposure" 
+         target="camera" 
+         endpoint="set_exposure"/>
+  
+  <route path="/camera/set_gain" 
+         target="camera" 
+         endpoint="set_gain"/>
+  
+  <route path="/camera/set_trigger_mode" 
+         target="camera" 
+         endpoint="set_trigger_mode"/>
+  
+  <route path="/camera/soft_trigger" 
+         target="camera" 
+         endpoint="soft_trigger"/>
+  
+  <route path="/detector/get_result" 
+         target="detector" 
+         endpoint="get_result"/>
+  
+  <route path="/detector/get_config" 
+         target="detector" 
+         endpoint="get_config"/>
+  
+  <route path="/detector/onoff" 
+         target="detector" 
+         endpoint="onoff"/>
+  
+  <route path="/detector/set_threshold" 
+         target="detector" 
+         endpoint="set_threshold"/>
+  
+  <route path="/comm/get_status" 
+         target="comm" 
+         endpoint="get_status"/>
+  
+  <route path="/comm/get_config" 
+         target="comm" 
+         endpoint="get_config"/>
+  
+  <route path="/comm/set_config" 
+         target="comm" 
+         endpoint="set_config"/>
+</service_routing>
+
+</pipeline>

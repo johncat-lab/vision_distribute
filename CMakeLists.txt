@@ -4,10 +4,16 @@ project(vision_distribute LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 设置安装后的 RPATH，让可执行文件自动找到 ../../lib/ 下的共享库
+# 设置安装后的 RPATH，让可执行文件自动找到共享库
 # 二进制安装路径: install/bins/<nodename>/<binary>，库路径: install/lib/
-set(CMAKE_INSTALL_RPATH "\$ORIGIN/../../lib")
-set(CMAKE_BUILD_RPATH "\$ORIGIN/../../lib")
+# 同时添加 conda 环境路径以找到系统库（Protobuf, OpenCV 等）
+if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path/../../lib;${CMAKE_PREFIX_PATH}/lib")
+    set(CMAKE_BUILD_RPATH "@loader_path/../../lib;${CMAKE_PREFIX_PATH}/lib")
+else()
+    set(CMAKE_INSTALL_RPATH "\$ORIGIN/../../lib;${CMAKE_PREFIX_PATH}/lib")
+    set(CMAKE_BUILD_RPATH "\$ORIGIN/../../lib;${CMAKE_PREFIX_PATH}/lib")
+endif()
 
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "x86_64")
@@ -22,35 +28,56 @@ endif()
 option(USE_HIK "Build with Hikrobot MVS camera support" ON)
 
 if(USE_HIK)
-    if(UNIX AND NOT APPLE)
-        set(HIK_SDK_PATH_DEFAULT "/opt/MVS")
-    else()
+    # 平台相关路径配置
+    if(APPLE)
+        # macOS 平台
         set(HIK_SDK_PATH_DEFAULT "/Library/MVS_SDK")
-    endif()
-    set(HIK_SDK_PATH "${HIK_SDK_PATH_DEFAULT}" CACHE PATH "Path to Hikrobot MVS SDK")
-    if(UNIX AND NOT APPLE)
-        set(HIK_SDK_INCLUDE_DIR "${HIK_SDK_PATH}/include")
+        set(HIK_SDK_INCLUDE_SUBDIR "Includes")
+        set(HIK_SDK_LIB_SUBDIR "lib")
+        set(HIK_LIB_NAME "MvCameraControl")
+        message(STATUS "[海康SDK] 检测到 macOS 平台")
+    elseif(UNIX)
+        # Linux 平台
+        set(HIK_SDK_PATH_DEFAULT "/opt/MVS")
+        set(HIK_SDK_INCLUDE_SUBDIR "include")
+        set(HIK_SDK_LIB_SUBDIR "lib/64")
+        set(HIK_LIB_NAME "MvCameraControl")
+        message(STATUS "[海康SDK] 检测到 Linux 平台")
     else()
-        set(HIK_SDK_INCLUDE_DIR "${HIK_SDK_PATH}/Includes")
-    endif()
-    if(UNIX AND NOT APPLE)
-        set(HIK_SDK_LIB_DIR "${HIK_SDK_PATH}/lib/64")
-    else()
-        set(HIK_SDK_LIB_DIR "${HIK_SDK_PATH}/lib")
-    endif()
-
-    find_library(HIK_MVCAMERACONTROL_LIB
-        NAMES MvCameraControl
-        PATHS ${HIK_SDK_LIB_DIR}
-        NO_DEFAULT_PATH
-    )
-
-    if(NOT HIK_MVCAMERACONTROL_LIB)
-        message(WARNING "未找到海康 MVS SDK 库: ${HIK_SDK_LIB_DIR}，将跳过 camera_node")
+        message(WARNING "[海康SDK] 不支持的操作系统，将跳过 camera_node")
         set(USE_HIK OFF)
-    else()
-        message(STATUS "海康 SDK 路径: ${HIK_SDK_PATH}")
-        message(STATUS "海康 SDK 库: ${HIK_MVCAMERACONTROL_LIB}")
+    endif()
+
+    if(USE_HIK)
+        # 优先使用 build.sh 传入的 HIK_SDK_ROOT，否则使用默认路径
+        if(HIK_SDK_ROOT)
+            set(HIK_SDK_PATH "${HIK_SDK_ROOT}" CACHE PATH "Path to Hikrobot MVS SDK" FORCE)
+            message(STATUS "[海康SDK] 使用 build.sh 传入的路径: ${HIK_SDK_ROOT}")
+        else()
+            set(HIK_SDK_PATH "${HIK_SDK_PATH_DEFAULT}" CACHE PATH "Path to Hikrobot MVS SDK")
+        endif()
+        
+        # 设置包含目录和库目录
+        set(HIK_SDK_INCLUDE_DIR "${HIK_SDK_PATH}/${HIK_SDK_INCLUDE_SUBDIR}")
+        set(HIK_SDK_LIB_DIR "${HIK_SDK_PATH}/${HIK_SDK_LIB_SUBDIR}")
+
+        # 查找库文件
+        find_library(HIK_MVCAMERACONTROL_LIB
+            NAMES ${HIK_LIB_NAME}
+            PATHS ${HIK_SDK_LIB_DIR}
+            NO_DEFAULT_PATH
+        )
+
+        if(NOT HIK_MVCAMERACONTROL_LIB)
+            message(WARNING "[海康SDK] 未找到库文件: ${HIK_SDK_LIB_DIR}/lib${HIK_LIB_NAME}，将跳过 camera_node")
+            message(WARNING "[海康SDK] 可通过 -DHIK_SDK_PATH=<path> 指定SDK路径")
+            set(USE_HIK OFF)
+        else()
+            message(STATUS "[海康SDK] 路径: ${HIK_SDK_PATH}")
+            message(STATUS "[海康SDK] 包含目录: ${HIK_SDK_INCLUDE_DIR}")
+            message(STATUS "[海康SDK] 库文件: ${HIK_MVCAMERACONTROL_LIB}")
+            message(STATUS "[海康SDK] 已启用")
+        endif()
     endif()
 endif()
 
@@ -195,6 +222,9 @@ option(BUILD_GUI "Build Qt6 GUI manager application" OFF)
 # ========== 添加子目录 ==========
 add_subdirectory(logger)
 
+# vision_messages 必须在 rpc 之前处理，因为节点需要链接 Protobuf 消息库
+add_subdirectory(vision_messages)
+
 # vision_interfaces 必须在 rpc 之前处理，因为 rpc 需要链接其生成的 target
 if(rclcpp_FOUND)
     add_subdirectory(vision_interfaces)
@@ -211,10 +241,12 @@ endif()
 
 add_subdirectory(detector_node)
 add_subdirectory(comm_node)
+add_subdirectory(modbus_node)
 add_subdirectory(image_publisher_node)
 
 if(BUILD_GUI)
     add_subdirectory(manager)
+    add_subdirectory(inspector)
 endif()
 
 # ========== 通信验证测试 ==========

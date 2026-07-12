@@ -50,6 +50,9 @@ private:
     std::mutex detector_mutex_;
     std::atomic<bool> detector_ready_{false};
     std::atomic<bool> detector_enabled_{false};
+    
+    // 配置文件路径
+    std::string detector_config_file_;
 
     // 最新检测结果
     DetectionMsg latest_detection_;

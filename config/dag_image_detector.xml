@@ -1,0 +1,100 @@
+<?xml version="1.0"?>
+<!--
+  DAG 调度实例：图像发布器 + 检测器流水线
+  
+  流水线架构：
+  ┌──────────────────────┐      ┌──────────────┐
+  │ image_publisher_node │─────>│ detector_node│
+  │    (发布 test.png)   │ Frame│  (目标检测)   │
+  └──────────────────────┘      └──────────────┘
+                                    │
+                            ┌───────┴───────┐
+                            ↓               ↓
+                     DetectionMsg      AnnotationMsg
+  
+  使用方式：
+  ./build/install/bins/dag_launcher/dag_launcher --pipeline dag_image_detector.xml --bins-dir ..
+  
+  测试方式：
+  ./build/install/bins/tests/test_detection_result
+-->
+<pipeline>
+
+<templates>
+  
+  <template name="image_publisher_node">
+    <binary>image_publisher_node</binary>
+    <out port="frame_output" type="FrameMsg"/>
+  </template>
+
+  <template name="detector_node">
+    <binary>detector_node</binary>
+    <in  port="frame_input"       type="FrameMsg"/>
+    <out port="detection_output"  type="DetectionMsg"/>
+    <out port="annotation_output" type="AnnotationMsg"/>
+    <service role="detector"
+             endpoints="get_result,get_config,onoff,set_threshold,reload_template"/>
+  </template>
+
+  <template name="comm_node">
+    <binary>comm_node</binary>
+    <in  port="detection_input" type="DetectionMsg"/>
+    <service role="comm"
+             endpoints="set_config,get_config,get_status"/>
+  </template>
+
+</templates>
+
+<instances>
+  
+  <instance name="publisher" template="image_publisher_node">
+    <config>image_publisher_config.xml</config>
+  </instance>
+
+  <instance name="detector" template="detector_node">
+    <config>detector.xml</config>
+    <param name="enabled" value="1"/>
+  </instance>
+
+  <instance name="comm" template="comm_node">
+    <config>communication.xml</config>
+  </instance>
+
+</instances>
+
+<wiring>
+  
+  <wire from="publisher"    
+        from_port="frame_output"
+        to="detector"    
+        to_port="frame_input"
+        topic="vision/frame"/>
+
+  <wire from="detector"
+        from_port="detection_output"
+        to="comm"
+        to_port="detection_input"
+        topic="vision/detection"/>
+
+</wiring>
+
+<startup>
+  <order>
+    <step>publisher</step>
+    <step>detector</step>
+    <step>comm</step>
+  </order>
+  <delay_ms>500</delay_ms>
+</startup>
+
+<service_routing>
+  <route path="/detector/get_result" 
+         target="detector" 
+         endpoint="get_result"/>
+  
+  <route path="/detector/onoff" 
+         target="detector" 
+         endpoint="onoff"/>
+</service_routing>
+
+</pipeline>

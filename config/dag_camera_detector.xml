@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<!--
+  DAG 调度实例：相机 + 检测器流水线
+  
+  流水线架构：
+  ┌─────────────┐      ┌──────────────┐
+  │ camera_node │─────>│ detector_node│
+  │  (图像采集)  │ Frame│  (目标检测)   │
+  └─────────────┘      └──────────────┘
+                           │
+                   ┌───────┴───────┐
+                   ↓               ↓
+            DetectionMsg      AnnotationMsg
+         (检测结果)         (标注信息)
+  
+  使用方式：
+  ./build/install/bins/dag_launcher/dag_launcher config/dag_camera_detector.xml
+  
+  测试方式：
+  ./build/install/bins/tests/test_detection_result
+-->
+<pipeline>
+
+<!-- ========== 节点模板定义 ========== -->
+<templates>
+  
+  <!-- 相机节点模板 -->
+  <template name="camera_node">
+    <binary>camera_node</binary>
+    <out port="frame_output" type="FrameMsg"/>
+    <service role="camera"
+             endpoints="set_exposure,set_gain,set_trigger_mode,soft_trigger,get_config"/>
+  </template>
+
+  <!-- 检测器节点模板 -->
+  <template name="detector_node">
+    <binary>detector_node</binary>
+    <in  port="frame_input"       type="FrameMsg"/>
+    <out port="detection_output"  type="DetectionMsg"/>
+    <out port="annotation_output" type="AnnotationMsg"/>
+    <service role="detector"
+             endpoints="get_result,get_config,onoff,set_threshold,reload_template"/>
+  </template>
+
+</templates>
+
+<!-- ========== 节点实例化 ========== -->
+<instances>
+  
+  <!-- 实例 1：相机 -->
+  <instance name="camera" template="camera_node">
+    <config>camera_config.xml</config>
+  </instance>
+
+  <!-- 实例 2：检测器 -->
+  <instance name="detector" template="detector_node">
+    <config>detector.xml</config>
+    <param name="enabled" value="1"/>
+  </instance>
+
+</instances>
+
+<!-- ========== 数据流连线 ========== -->
+<wiring>
+  
+  <!-- 连线 1：相机 → 检测器 -->
+  <wire from="camera"    
+        from_port="frame_output"
+        to="detector"    
+        to_port="frame_input"
+        topic="vision/frame"/>
+
+</wiring>
+
+<!-- ========== 启动顺序控制 ========== -->
+<startup>
+  <order>
+    <step>camera</step>
+    <step>detector</step>
+  </order>
+  <delay_ms>500</delay_ms>
+</startup>
+
+<!-- ========== 服务路由配置 ========== -->
+<service_routing>
+  <route path="/camera/get_config" 
+         target="camera" 
+         endpoint="get_config"/>
+  
+  <route path="/detector/get_result" 
+         target="detector" 
+         endpoint="get_result"/>
+  
+  <route path="/detector/onoff" 
+         target="detector" 
+         endpoint="onoff"/>
+</service_routing>
+
+</pipeline>
