@@ -261,6 +261,10 @@ bool DagLauncher::launchNode(const NodeLaunchConfig& config, NodeRuntimeState& s
         args.push_back("--topic-map");
         args.push_back(config.topic_map);
     }
+    if (!system_config_file_.empty()) {
+        args.push_back("--system-config");
+        args.push_back(system_config_file_);
+    }
 
     for (const auto& a : args) {
         LOG_INFO("  %s", a.c_str());

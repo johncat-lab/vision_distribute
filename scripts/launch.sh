@@ -62,6 +62,10 @@ show_help() {
     done
     echo "  ──────────────────────────────────────────────────────────────────────────"
     echo ""
+    echo "传输后端选项:"
+    echo "  --ros2              使用 ROS2 传输后端（自动 source ROS2 环境）"
+    echo "  --transport <type>  指定传输后端: zeromq | ros2 | zenoh"
+    echo ""
     echo "选项 (透传给 dag_launcher):"
     echo "  --dry-run           仅打印启动命令，不实际启动"
     echo "  --parallel          按层并行启动（同层节点无依赖，同时启动）"
@@ -77,6 +81,7 @@ show_help() {
     echo "示例:"
     echo "  ./launch.sh camera-detector-commu"
     echo "  ./launch.sh camera-detector-commu --dry-run"
+    echo "  ./launch.sh camera-detector-commu --ros2     # 使用 ROS2 传输后端"
     echo "  ./launch.sh camera-detector-commu --parallel --status-report"
     echo "  ./launch.sh image-detector --parallel"
     echo ""
@@ -146,8 +151,17 @@ case "$1" in
 esac
 
 # 收集剩余参数透传给 dag_launcher
+USE_ROS2=false
 while [[ $# -gt 0 ]]; do
-    EXTRA_ARGS+=("$1")
+    case "$1" in
+        --ros2)
+            USE_ROS2=true
+            EXTRA_ARGS+=("--transport" "ros2")
+            ;;
+        *)
+            EXTRA_ARGS+=("$1")
+            ;;
+    esac
     shift
 done
 
@@ -197,6 +211,30 @@ if [[ "$(uname)" == "Darwin" ]]; then
     export DYLD_LIBRARY_PATH="${INSTALL_DIR}/lib:${BINS_DIR}/lib:${DYLD_LIBRARY_PATH:-}"
 else
     export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${BINS_DIR}/lib:${LD_LIBRARY_PATH:-}"
+fi
+
+# 如果使用 ROS2 传输后端，自动 source ROS2 环境并配置 Fast DDS
+if [[ "$USE_ROS2" == "true" ]]; then
+    if [[ -f "/opt/ros/humble/setup.bash" ]]; then
+        set +u  # ROS2 setup.bash 引用未定义变量，临时关闭 nounset
+        source /opt/ros/humble/setup.bash
+        set -u
+        echo "[launch.sh] 已 source ROS2 Humble 环境"
+    elif [[ -f "/opt/ros/jazzy/setup.bash" ]]; then
+        set +u
+        source /opt/ros/jazzy/setup.bash
+        set -u
+        echo "[launch.sh] 已 source ROS2 Jazzy 环境"
+    else
+        echo "警告: 未找到 ROS2 setup.bash，请手动 source ROS2 环境"
+    fi
+
+    # Fast DDS: 增大 UDP buffer 以支持大帧图像 (~12MB)
+    FASTDDS_PROFILES="${CONFIG_SRC_DIR}/fastdds_large_buffer.xml"
+    if [[ -f "$FASTDDS_PROFILES" ]]; then
+        export FASTRTPS_DEFAULT_PROFILES_FILE="$FASTDDS_PROFILES"
+        echo "[launch.sh] Fast DDS 配置已加载: $FASTDDS_PROFILES"
+    fi
 fi
 
 # 构建命令

@@ -92,6 +92,10 @@ public:
     /// @brief 设置自动重启间隔（毫秒，默认 2000）
     void setAutoRestartDelayMs(int ms) { auto_restart_delay_ms_ = ms; }
 
+    /// @brief 设置系统配置文件路径（传递给子节点的 --system-config 参数）
+    /// 例如 "system_config_ros2.xml" 使所有子节点使用 ROS2 传输
+    void setSystemConfig(const std::string& path) { system_config_file_ = path; }
+
     /// @brief 运行时重新加载 pipeline，只启停变化的节点
     /// @param new_pipeline_path 新的 pipeline.xml 路径；为空则重载当前的
     /// @param diff 输出差异详情
@@ -133,6 +137,7 @@ private:
     bool auto_restart_ = true;
     int max_restarts_ = 10;
     int auto_restart_delay_ms_ = 2000;
+    std::string system_config_file_;  // 传递给子节点的系统配置文件
 
     std::map<std::string, NodeLaunchConfig> launch_configs_;
     std::map<std::string, NodeRuntimeState> states_;

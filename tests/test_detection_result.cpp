@@ -38,13 +38,13 @@ int main() {
         return 1;
     }
 
-    auto detection_subscriber = factory->createSubscriber<vision::messages::detection::DetectionMsg>("vision/detection");
+    auto detection_subscriber = factory->createSubscriber<DetectionMsg>("vision/detection");
     if (!detection_subscriber) {
         std::cerr << "[错误] 无法创建 DetectionMsg Subscriber" << std::endl;
         return 1;
     }
 
-    auto annotation_subscriber = factory->createSubscriber<vision::messages::detection::AnnotationMsg>("vision/annotation");
+    auto annotation_subscriber = factory->createSubscriber<AnnotationMsg>("vision/annotation");
     if (!annotation_subscriber) {
         std::cerr << "[错误] 无法创建 AnnotationMsg Subscriber" << std::endl;
         return 1;
@@ -115,7 +115,7 @@ int main() {
                   << " 等待检测结果..." << std::flush;
     });
 
-    detection_subscriber->subscribe([&](const vision::messages::detection::DetectionMsg& msg) {
+    detection_subscriber->subscribe([&](const DetectionMsg& msg) {
         std::lock_guard<std::mutex> lock(image_mutex);
         
         if (latest_image.empty()) {
@@ -141,7 +141,7 @@ int main() {
         }
     });
 
-    annotation_subscriber->subscribe([&](const vision::messages::detection::AnnotationMsg& msg) {
+    annotation_subscriber->subscribe([&](const AnnotationMsg& msg) {
         std::lock_guard<std::mutex> lock(image_mutex);
         
         if (latest_image.empty()) {

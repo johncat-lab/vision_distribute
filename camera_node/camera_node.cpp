@@ -147,22 +147,22 @@ void CameraNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
         "set_exposure",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = std::to_string(req->exposure_time);
+            sr.set_payload(std::to_string(req->exposure_time));
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetExposure::Request> {
             auto req = std::make_shared<vision_interfaces::srv::CameraSetExposure::Request>();
-            req->exposure_time = std::stof(sr.payload);
+            req->exposure_time = std::stof(sr.payload());
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -170,22 +170,22 @@ void CameraNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
         "set_gain",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = std::to_string(req->gain);
+            sr.set_payload(std::to_string(req->gain));
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetGain::Request> {
             auto req = std::make_shared<vision_interfaces::srv::CameraSetGain::Request>();
-            req->gain = std::stof(sr.payload);
+            req->gain = std::stof(sr.payload());
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -193,22 +193,22 @@ void CameraNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
         "set_trigger_mode",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = req->mode;
+            sr.set_payload(req->mode);
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetTriggerMode::Request> {
             auto req = std::make_shared<vision_interfaces::srv::CameraSetTriggerMode::Request>();
-            req->mode = sr.payload;
+            req->mode = sr.payload();
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -216,16 +216,16 @@ void CameraNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
         "soft_trigger",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraSoftTrigger::Request> {
             return std::make_shared<vision_interfaces::srv::CameraSoftTrigger::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -233,16 +233,16 @@ void CameraNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
         "get_config",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->config_data = sr.data;
+            resp->success = sr.success();
+            resp->config_data = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraGetConfig::Request> {
             return std::make_shared<vision_interfaces::srv::CameraGetConfig::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->config_data;
+            sr.set_success(resp->success);
+            sr.set_data(resp->config_data);
             return sr;
         });
 

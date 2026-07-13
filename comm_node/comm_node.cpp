@@ -114,22 +114,22 @@ void CommNode::initServices(ServiceEndpointRegistry& services, NodeContainer& co
         "set_config",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = req->config_data;
+            sr.set_payload(req->config_data);
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CommSetConfig::Request> {
             auto req = std::make_shared<vision_interfaces::srv::CommSetConfig::Request>();
-            req->config_data = sr.payload;
+            req->config_data = sr.payload();
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -137,16 +137,16 @@ void CommNode::initServices(ServiceEndpointRegistry& services, NodeContainer& co
         "get_config",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->config_data = sr.data;
+            resp->success = sr.success();
+            resp->config_data = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetConfig::Request> {
             return std::make_shared<vision_interfaces::srv::CommGetConfig::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->config_data;
+            sr.set_success(resp->success);
+            sr.set_data(resp->config_data);
             return sr;
         });
 
@@ -154,16 +154,16 @@ void CommNode::initServices(ServiceEndpointRegistry& services, NodeContainer& co
         "get_status",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->status_data = sr.data;
+            resp->success = sr.success();
+            resp->status_data = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetStatus::Request> {
             return std::make_shared<vision_interfaces::srv::CommGetStatus::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->status_data;
+            sr.set_success(resp->success);
+            sr.set_data(resp->status_data);
             return sr;
         });
 

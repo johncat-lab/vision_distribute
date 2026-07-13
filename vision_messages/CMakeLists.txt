@@ -6,8 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 # ===== 查找Protobuf =====
 find_package(Protobuf REQUIRED)
 
-# Protobuf 33.5.0+ 依赖 absl，需要显式查找
-find_package(absl REQUIRED)
+# Protobuf 33.5.0+ 依赖 absl，旧版本不需要
+find_package(absl QUIET)
 
 message(STATUS "========================================")
 message(STATUS "Protobuf Configuration:")

@@ -25,6 +25,8 @@ static void printUsage(const char* prog) {
     std::cout << "\n选项:\n";
     std::cout << "  --pipeline <path>   pipeline.xml 路径（必需）\n";
     std::cout << "  --bins-dir <path>   节点 binary 目录（默认: pipeline.xml 同级）\n";
+    std::cout << "  --transport <type>   传输后端: zeromq | ros2 | zenoh（默认读取节点目录下的 system_config.xml）\n";
+    std::cout << "  --system-config <path> 指定系统配置文件路径（覆盖 --transport）\n";
     std::cout << "  --parallel          按层并行启动（同层节点无依赖，同时启动）\n";
     std::cout << "  --dry-run           仅打印启动命令，不实际启动\n";
     std::cout << "  --startup-delay <ms> 节点间/层间启动间隔（毫秒，默认 200）\n";
@@ -49,6 +51,8 @@ int main(int argc, char* argv[]) {
     int max_restarts = 10;
     int auto_restart_delay_ms = 2000;
     bool status_report = false;
+    std::string transport_type;
+    std::string system_config;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -56,6 +60,10 @@ int main(int argc, char* argv[]) {
             pipeline_path = argv[++i];
         } else if (arg == "--bins-dir" && i + 1 < argc) {
             bins_dir = argv[++i];
+        } else if (arg == "--transport" && i + 1 < argc) {
+            transport_type = argv[++i];
+        } else if (arg == "--system-config" && i + 1 < argc) {
+            system_config = argv[++i];
         } else if (arg == "--dry-run") {
             dry_run = true;
         } else if (arg == "--parallel") {
@@ -96,6 +104,27 @@ int main(int argc, char* argv[]) {
     launcher.setAutoRestart(auto_restart);
     launcher.setMaxRestarts(max_restarts);
     launcher.setAutoRestartDelayMs(auto_restart_delay_ms);
+
+    // 设置传输后端
+    if (!system_config.empty()) {
+        launcher.setSystemConfig(system_config);
+        LOG_INFO("[DagLauncher] 系统配置: %s", system_config.c_str());
+    } else if (!transport_type.empty()) {
+        std::string cfg_file;
+        if (transport_type == "ros2") {
+            cfg_file = "system_config_ros2.xml";
+        } else if (transport_type == "zenoh") {
+            cfg_file = "system_config_zenoh.xml";
+        } else if (transport_type == "zeromq" || transport_type == "zmq") {
+            cfg_file = "system_config.xml";
+        } else {
+            std::cerr << "错误: 未知的传输类型 '" << transport_type << "'\n";
+            std::cerr << "可选值: zeromq | ros2 | zenoh\n";
+            return 1;
+        }
+        launcher.setSystemConfig(cfg_file);
+        LOG_INFO("[DagLauncher] 传输后端: %s (配置文件: %s)", transport_type.c_str(), cfg_file.c_str());
+    }
 
     if (!launcher.loadPipeline(pipeline_path, bins_dir)) {
         return 1;
@@ -171,6 +200,15 @@ int main(int argc, char* argv[]) {
             std::cout << " --instance " << inst_name;
             if (!it->second.topic_map.empty()) {
                 std::cout << " --topic-map " << it->second.topic_map;
+            }
+            if (!system_config.empty()) {
+                std::cout << " --system-config " << system_config;
+            } else if (!transport_type.empty()) {
+                std::string cfg;
+                if (transport_type == "ros2") cfg = "system_config_ros2.xml";
+                else if (transport_type == "zenoh") cfg = "system_config_zenoh.xml";
+                else cfg = "system_config.xml";
+                std::cout << " --system-config " << cfg;
             }
             std::cout << "\n\n";
         }

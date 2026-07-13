@@ -294,24 +294,20 @@ int main(int argc, char* argv[]) {
         msg.set_exposure_time(0.0f);
         msg.set_gain(0.0f);
 
-        // 复制像素数据（行连续存储）
-        size_t data_size = static_cast<size_t>(gray.rows) * static_cast<size_t>(gray.cols);
-        std::string data_str(data_size, '\0');
-        if (gray.isContinuous()) {
-            std::memcpy(&data_str[0], gray.data, data_size);
-        } else {
-            for (int r = 0; r < gray.rows; ++r) {
-                std::memcpy(&data_str[0] + r * gray.cols,
-                            gray.ptr(r), gray.cols);
-            }
-        }
+        // 压缩像素数据为 PNG（大幅减小消息体积，避免 DDS UDP 大消息丢失）
+        std::vector<uint8_t> compressed;
+        cv::imencode(".png", gray, compressed);
+        std::string data_str(compressed.begin(), compressed.end());
+        msg.set_pixel_type(0);  // pixel_type=0 表示 PNG 压缩数据
         msg.set_data(data_str);
 
         frame_pub->publish(msg);
 
-        LOG_DEBUG("[ImagePublisher] 发布帧 #%u: %s (%ux%u, %zu bytes)",
+        LOG_DEBUG("[ImagePublisher] 发布帧 #%u: %s (%ux%u, raw=%zu, compressed=%zu bytes)",
                   msg.frame_num(), fs::path(img_path).filename().c_str(),
-                  msg.width(), msg.height(), msg.data().size());
+                  msg.width(), msg.height(),
+                  static_cast<size_t>(gray.rows) * gray.cols,
+                  msg.data().size());
 
         ++image_idx;
 

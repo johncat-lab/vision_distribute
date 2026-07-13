@@ -1,5 +1,6 @@
 #include "rpc/node_container.h"
 #include "rpc/node_factory.h"
+#include "rpc/config_loader.h"
 #include "rpc/types.h"
 #include "dag/service_registry.h"
 #include "logger/logger.h"
@@ -53,11 +54,37 @@ int NodeContainer::run(int argc, char* argv[]) {
     std::signal(SIGINT, nodeContainerSignalHandler);
     std::signal(SIGTERM, nodeContainerSignalHandler);
 
-    // 4) 创建传输层（使用默认 NodeConfig）
+    // 4) 加载系统配置（transport 层）
     NodeConfig cfg;
     cfg.node_name = node_->describe().name;
-    cfg.transport = TransportType::ZEROMQ;
-    cfg.base_port = 15550;
+
+    // 尝试加载 system_config.xml（优先使用 --system-config 指定的路径，否则查找 CWD 下的文件）
+    std::string sys_cfg_path = system_config_;
+    if (sys_cfg_path.empty()) {
+        // 默认查找当前目录下的 system_config.xml
+        if (access("system_config.xml", F_OK) == 0) {
+            sys_cfg_path = "system_config.xml";
+        }
+    }
+    if (!sys_cfg_path.empty() && access(sys_cfg_path.c_str(), F_OK) == 0) {
+        try {
+            cfg = ConfigLoader::loadSystemConfig(sys_cfg_path);
+            cfg.node_name = node_->describe().name;
+            LOG_INFO("[NodeContainer] 已加载系统配置: %s (transport=%s)",
+                     sys_cfg_path.c_str(),
+                     cfg.transport == TransportType::ROS2 ? "ROS2" :
+                     cfg.transport == TransportType::ZENOH ? "Zenoh" : "ZeroMQ");
+        } catch (const std::exception& e) {
+            LOG_WARN("[NodeContainer] 加载系统配置失败: %s，回退到 ZeroMQ", e.what());
+            cfg.transport = TransportType::ZEROMQ;
+            cfg.base_port = 15550;
+        }
+    } else {
+        cfg.transport = TransportType::ZEROMQ;
+        cfg.base_port = 15550;
+        LOG_INFO("[NodeContainer] 未找到系统配置文件，使用默认 ZeroMQ");
+    }
+
     factory_ = std::make_unique<NodeFactory>(cfg);
 
     // 4b) 创建 ServiceRegistry（dag 模块，复用 factory_ 的传输层）
@@ -167,6 +194,8 @@ bool NodeContainer::parseArgs(int argc, char* argv[]) {
             instance_name_ = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             config_file_ = argv[++i];
+        } else if (arg == "--system-config" && i + 1 < argc) {
+            system_config_ = argv[++i];
         } else if (arg == "--topic-map" && i + 1 < argc) {
             topic_map_ = argv[++i];
         }

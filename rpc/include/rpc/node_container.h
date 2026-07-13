@@ -113,6 +113,7 @@ private:
     std::atomic<bool> running_{false};
     std::string instance_name_;
     std::string config_file_;
+    std::string system_config_;
     std::string topic_map_;
 
     bool parseArgs(int argc, char* argv[]);

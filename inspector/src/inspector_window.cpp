@@ -454,10 +454,17 @@ void InspectorWindow::handleFrameMsg(const FrameMsg& msg)
     ++frame_count_;
     uint32_t w = msg.width();
     uint32_t h = msg.height();
-    auto data = FrameMsg_GetData(msg);
+    uint32_t pt = msg.pixel_type();
+    const std::string& raw_data = msg.data();
+    std::vector<uint8_t> data(raw_data.begin(), raw_data.end());
 
-    QMetaObject::invokeMethod(this, [this, data = std::move(data), w, h, msg]() {
-        displayImage(data.data(), data.size(), w, h, msg.pixel_type());
+    QMetaObject::invokeMethod(this, [this, data = std::move(data), w, h, pt,
+                                     camera_id = msg.camera_id(),
+                                     frame_num = msg.frame_num(),
+                                     exposure = msg.exposure_time(),
+                                     gain_val = msg.gain(),
+                                     ts = msg.timestamp()]() {
+        displayImage(data.data(), data.size(), w, h, pt);
 
         msg_viewer_->setPlainText(QString(
             "FrameMsg:\n"
@@ -469,60 +476,69 @@ void InspectorWindow::handleFrameMsg(const FrameMsg& msg)
             "  gain: %7 dB\n"
             "  data_size: %8 bytes\n"
             "  timestamp: %9"
-        ).arg(msg.camera_id())
-         .arg(msg.frame_num())
+        ).arg(camera_id)
+         .arg(frame_num)
          .arg(w).arg(h)
-         .arg(msg.pixel_type())
-         .arg(msg.exposure_time(), 0, 'f', 1)
-         .arg(msg.gain(), 0, 'f', 2)
+         .arg(pt)
+         .arg(exposure, 0, 'f', 1)
+         .arg(gain_val, 0, 'f', 2)
          .arg(data.size())
-         .arg(msg.timestamp()));
+         .arg(ts));
     }, Qt::QueuedConnection);
 }
 
 void InspectorWindow::handleDetectionMsg(const DetectionMsg& msg)
 {
-    QMetaObject::invokeMethod(this, [this, msg]() {
+    QMetaObject::invokeMethod(this, [this,
+                                     frame_num = msg.frame_num(),
+                                     object_count = msg.object_count(),
+                                     ts = msg.timestamp(),
+                                     proto = msg.protocol_string()]() {
         QString info = QString(
             "DetectionMsg:\n"
             "  frame_num: %1\n"
             "  object_count: %2\n"
             "  timestamp: %3\n"
             "  protocol: %4"
-        ).arg(msg.frame_num())
-         .arg(msg.object_count())
-         .arg(msg.timestamp())
-         .arg(QString::fromStdString(msg.protocol_string()));
+        ).arg(frame_num)
+         .arg(object_count)
+         .arg(ts)
+         .arg(QString::fromStdString(proto));
 
         msg_viewer_->setPlainText(info);
         appendLog(QString("[检测] frame=%1 objects=%2")
-            .arg(msg.frame_num()).arg(msg.object_count()), "blue");
+            .arg(frame_num).arg(object_count), "blue");
     }, Qt::QueuedConnection);
 }
 
 void InspectorWindow::handleAnnotationMsg(const AnnotationMsg& msg)
 {
-    QMetaObject::invokeMethod(this, [this, msg]() {
+    QMetaObject::invokeMethod(this, [this,
+                                     frame_num = msg.frame_num(),
+                                     tw = msg.template_width(),
+                                     th = msg.template_height(),
+                                     num_objs = msg.objects_size(),
+                                     msg]() {
         QString info = QString(
             "AnnotationMsg:\n"
             "  frame_num: %1\n"
             "  template: %2 x %3\n"
             "  objects: %4\n"
-        ).arg(msg.frame_num())
-         .arg(msg.template_width())
-         .arg(msg.template_height())
-         .arg(msg.objects.size());
+        ).arg(frame_num)
+         .arg(tw)
+         .arg(th)
+         .arg(num_objs);
 
-        for (size_t i = 0; i < msg.objects.size(); ++i) {
-            const auto& obj = msg.objects[i];
+        for (int i = 0; i < msg.objects_size(); ++i) {
+            const auto& obj = msg.objects(i);
             info += QString("  [%1] x=%2 y=%3 angle=%4 score=%5 type=%6 id=%7\n")
                 .arg(i)
-                .arg(obj.x, 0, 'f', 1)
-                .arg(obj.y, 0, 'f', 1)
-                .arg(obj.angle, 0, 'f', 2)
-                .arg(obj.score, 0, 'f', 3)
-                .arg(obj.type)
-                .arg(obj.id);
+                .arg(obj.x(), 0, 'f', 1)
+                .arg(obj.y(), 0, 'f', 1)
+                .arg(obj.angle(), 0, 'f', 2)
+                .arg(obj.score(), 0, 'f', 3)
+                .arg(obj.type())
+                .arg(obj.id());
         }
 
         msg_viewer_->setPlainText(info);

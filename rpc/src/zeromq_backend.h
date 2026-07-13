@@ -57,13 +57,7 @@ public:
     bool publish(const T& msg) override {
         try {
             zmq::message_t topic_msg(topic_.data(), topic_.size());
-            std::string serialized;
-            // 支持 Protobuf 消息和带有 serialize() 方法的结构体
-            if constexpr (std::is_same_v<T, AnnotationMsg>) {
-                serialized = msg.serialize();
-            } else {
-                msg.SerializeToString(&serialized);
-            }
+            std::string serialized = vision::rpc::serialize(msg);
             zmq::message_t payload(serialized.data(), serialized.size());
             socket_.send(topic_msg, zmq::send_flags::sndmore);
             socket_.send(payload, zmq::send_flags::none);
@@ -146,13 +140,8 @@ private:
                         static_cast<const char*>(payload_msg.data()),
                         payload_msg.size()
                     );
-                    T msg;
-                    // 支持 Protobuf 消息和带有 deserialize() 方法的结构体
-                    if constexpr (std::is_same_v<T, AnnotationMsg>) {
-                        msg = T::deserialize(payload_str);
-                    } else {
-                        msg.ParseFromString(payload_str);
-                    }
+                    // 反序列化
+                    T msg = vision::rpc::deserialize<T>(payload_str);
                     if (callback_) {
                         callback_(msg);
                     }

@@ -124,16 +124,16 @@ void ModbusNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
         "get_config",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->config_data = sr.data;
+            resp->success = sr.success();
+            resp->config_data = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetConfig::Request> {
             return std::make_shared<vision_interfaces::srv::CommGetConfig::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->config_data;
+            sr.set_success(resp->success);
+            sr.set_data(resp->config_data);
             return sr;
         });
 
@@ -141,16 +141,16 @@ void ModbusNode::initServices(ServiceEndpointRegistry& services, NodeContainer& 
         "get_status",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->status_data = sr.data;
+            resp->success = sr.success();
+            resp->status_data = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetStatus::Request> {
             return std::make_shared<vision_interfaces::srv::CommGetStatus::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->status_data;
+            sr.set_success(resp->success);
+            sr.set_data(resp->status_data);
             return sr;
         });
 
@@ -254,9 +254,9 @@ void ModbusNode::tick(std::atomic<bool>& running) {
             continue;
         }
 
-        if (latest_detection_.object_count() > 0) {
+        if (latest_detection_.object_count > 0) {
             std::lock_guard<std::mutex> lock(detection_mutex_);
-            int obj_count = latest_detection_.object_count();
+            int obj_count = latest_detection_.object_count;
             std::lock_guard<std::mutex> modbus_lock(modbus_mutex_);
             if (modbus_ctx_) {
                 std::vector<uint16_t> values = {static_cast<uint16_t>(obj_count)};

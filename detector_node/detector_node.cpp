@@ -24,6 +24,8 @@
 #endif
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <filesystem>
 #include <sstream>
 #include <thread>
@@ -148,16 +150,16 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "get_result",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->detection_data.assign(sr.data.begin(), sr.data.end());
+            resp->success = sr.success();
+            resp->detection_data.assign(sr.data().begin(), sr.data().end());
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetResult::Request> {
             return std::make_shared<vision_interfaces::srv::DetectorGetResult::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data.assign(resp->detection_data.begin(), resp->detection_data.end());
+            sr.set_success(resp->success);
+            sr.set_data(std::string(resp->detection_data.begin(), resp->detection_data.end()));
             return sr;
         });
 
@@ -165,16 +167,16 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "get_config",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->ready = sr.success;
-            resp->config_data = sr.data;
+            resp->ready = sr.success();
+            resp->config_data = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetConfig::Request> {
             return std::make_shared<vision_interfaces::srv::DetectorGetConfig::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->ready;
-            sr.data = resp->config_data;
+            sr.set_success(resp->ready);
+            sr.set_data(resp->config_data);
             return sr;
         });
 
@@ -182,22 +184,22 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "onoff",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = req->command;
+            sr.set_payload(req->command);
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorOnOff::Request> {
             auto req = std::make_shared<vision_interfaces::srv::DetectorOnOff::Request>();
-            req->command = sr.payload;
+            req->command = sr.payload();
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -205,22 +207,22 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "set_threshold",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = std::to_string(req->threshold);
+            sr.set_payload(std::to_string(req->threshold));
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetThreshold::Request> {
             auto req = std::make_shared<vision_interfaces::srv::DetectorSetThreshold::Request>();
-            req->threshold = std::stof(sr.payload);
+            req->threshold = std::stof(sr.payload());
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -228,22 +230,22 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "set_v_threshold",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = std::to_string(req->threshold);
+            sr.set_payload(std::to_string(req->threshold));
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetVThreshold::Request> {
             auto req = std::make_shared<vision_interfaces::srv::DetectorSetVThreshold::Request>();
-            req->threshold = std::stoi(sr.payload);
+            req->threshold = std::stoi(sr.payload());
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -251,22 +253,22 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "set_grad_threshold",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = std::to_string(req->threshold);
+            sr.set_payload(std::to_string(req->threshold));
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetGradThreshold::Request> {
             auto req = std::make_shared<vision_interfaces::srv::DetectorSetGradThreshold::Request>();
-            req->threshold = std::stoi(sr.payload);
+            req->threshold = std::stoi(sr.payload());
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -274,16 +276,16 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "reload_template",
         [](auto) -> ServiceRequest { return ServiceRequest{}; },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorReloadTemplate::Request> {
             return std::make_shared<vision_interfaces::srv::DetectorReloadTemplate::Request>();
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -291,22 +293,22 @@ void DetectorNode::initServices(ServiceEndpointRegistry& services, NodeContainer
         "set_segment_mode",
         [](auto req) -> ServiceRequest {
             ServiceRequest sr;
-            sr.payload = req->mode;
+            sr.set_payload(req->mode);
             return sr;
         },
         [](const ServiceResponse& sr, auto resp) {
-            resp->success = sr.success;
-            resp->message = sr.data;
+            resp->success = sr.success();
+            resp->message = sr.data();
         },
         [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetSegmentMode::Request> {
             auto req = std::make_shared<vision_interfaces::srv::DetectorSetSegmentMode::Request>();
-            req->mode = sr.payload;
+            req->mode = sr.payload();
             return req;
         },
         [](auto resp) -> ServiceResponse {
             ServiceResponse sr;
-            sr.success = resp->success;
-            sr.data = resp->message;
+            sr.set_success(resp->success);
+            sr.set_data(resp->message);
             return sr;
         });
 
@@ -377,7 +379,16 @@ void DetectorNode::tick(std::atomic<bool>& running) {
 
 // ========== processFrame ==========
 void DetectorNode::processFrame(const FrameMsg& frame) {
-    if (!detector_ready_ || !detector_enabled_) return;
+    LOG_DEBUG("[DetectorNode] 收到帧 #%u (%ux%u, %zu bytes), ready=%d, enabled=%d",
+              frame.frame_num(), frame.width(), frame.height(),
+              frame.data().size(),
+              detector_ready_.load(), detector_enabled_.load());
+
+    if (!detector_ready_ || !detector_enabled_) {
+        LOG_DEBUG("[DetectorNode] 帧 #%u 被跳过 (ready=%d, enabled=%d)",
+                  frame.frame_num(), detector_ready_.load(), detector_enabled_.load());
+        return;
+    }
 
     // 解码帧 → 检测 → 发布
     try {
@@ -390,9 +401,29 @@ void DetectorNode::processFrame(const FrameMsg& frame) {
             frame_struct.width = static_cast<unsigned short>(frame.width());
             frame_struct.height = static_cast<unsigned short>(frame.height());
             frame_struct.pixelType = frame.pixel_type();
-            // 将 Protobuf string 转为 vector<uint8_t>
-            const std::string& data_str = frame.data();
-            frame_struct.data.assign(data_str.begin(), data_str.end());
+
+            const std::string& frame_data = frame.data();
+            if (frame.pixel_type() == 0) {
+                // PNG 压缩数据，需要解码
+                std::vector<uint8_t> encoded(frame_data.begin(), frame_data.end());
+                cv::Mat decoded = cv::imdecode(encoded, cv::IMREAD_UNCHANGED);
+                if (decoded.empty()) {
+                    LOG_WARN("[DetectorNode] PNG 解码失败，跳过帧 #%u", frame.frame_num());
+                    return;
+                }
+                // 确保灰度单通道
+                if (decoded.channels() > 1) {
+                    cv::cvtColor(decoded, decoded, cv::COLOR_BGR2GRAY);
+                }
+                frame_struct.data.assign(decoded.data,
+                    decoded.data + decoded.total() * decoded.elemSize());
+                frame_struct.width = static_cast<unsigned short>(decoded.cols);
+                frame_struct.height = static_cast<unsigned short>(decoded.rows);
+                frame_struct.pixelType = 0x01080001;  // Mono8
+            } else {
+                // 原始像素数据
+                frame_struct.data.assign(frame_data.begin(), frame_data.end());
+            }
             
             object_list = detector_->detect(frame_struct);
         }
@@ -442,26 +473,13 @@ void DetectorNode::processFrame(const FrameMsg& frame) {
         amsg.set_template_height(0); // 需要从配置获取
         
         for (const auto& obj : objects) {
-            auto* proto_obj = amsg.proto_msg.add_objects();
+            auto* proto_obj = amsg.add_objects();
             proto_obj->set_x(obj.getX());
             proto_obj->set_y(obj.getY());
             proto_obj->set_angle(obj.getAngle());
             proto_obj->set_score(0.0);  // ObjectInfo 没有 score 字段
             proto_obj->set_type(obj.getType());
             proto_obj->set_id(0);    // 根据实际需求设置
-        }
-        
-        // 同步objects 到便捷访问结构
-        amsg.objects.clear();
-        for (const auto& proto_obj : amsg.proto_msg.objects()) {
-            AnnotationMsg::ObjectAnnotation ann_obj;
-            ann_obj.x = proto_obj.x();
-            ann_obj.y = proto_obj.y();
-            ann_obj.angle = proto_obj.angle();
-            ann_obj.score = proto_obj.score();
-            ann_obj.type = proto_obj.type();
-            ann_obj.id = proto_obj.id();
-            amsg.objects.push_back(ann_obj);
         }
         
         if (annotation_pub_) annotation_pub_->publish(amsg);

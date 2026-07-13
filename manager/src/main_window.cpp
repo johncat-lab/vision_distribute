@@ -329,13 +329,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetExposure::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::CameraSetExposure::Request>();
-                req->exposure_time = std::stof(sr.payload);
+                req->exposure_time = std::stof(sr.payload());
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetGain>(
@@ -344,13 +344,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetGain::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::CameraSetGain::Request>();
-                req->gain = std::stof(sr.payload);
+                req->gain = std::stof(sr.payload());
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetTriggerMode>(
@@ -359,13 +359,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetTriggerMode::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::CameraSetTriggerMode::Request>();
-                req->mode = sr.payload;
+                req->mode = sr.payload();
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::CameraSoftTrigger>(
@@ -377,8 +377,8 @@ void MainWindow::setupRPC(const std::string& config_path)
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::CameraGetConfig>(
@@ -390,8 +390,8 @@ void MainWindow::setupRPC(const std::string& config_path)
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->config_data;
+                sr.set_success(resp->success);
+                sr.set_data(resp->config_data);
                 return sr;
             });
     }
@@ -406,8 +406,8 @@ void MainWindow::setupRPC(const std::string& config_path)
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data.assign(resp->detection_data.begin(), resp->detection_data.end());
+                sr.set_success(resp->success);
+                sr.set_data(std::string(resp->detection_data.begin(), resp->detection_data.end()));
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::DetectorGetConfig>(
@@ -419,8 +419,8 @@ void MainWindow::setupRPC(const std::string& config_path)
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->ready;
-                sr.data = resp->config_data;
+                sr.set_success(resp->ready);
+                sr.set_data(resp->config_data);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::DetectorOnOff>(
@@ -429,13 +429,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorOnOff::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::DetectorOnOff::Request>();
-                req->command = sr.payload;
+                req->command = sr.payload();
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetThreshold>(
@@ -444,13 +444,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetThreshold::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::DetectorSetThreshold::Request>();
-                req->threshold = std::stof(sr.payload);
+                req->threshold = std::stof(sr.payload());
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetVThreshold>(
@@ -459,13 +459,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetVThreshold::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::DetectorSetVThreshold::Request>();
-                req->threshold = std::stoi(sr.payload);
+                req->threshold = std::stoi(sr.payload());
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetGradThreshold>(
@@ -474,13 +474,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetGradThreshold::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::DetectorSetGradThreshold::Request>();
-                req->threshold = std::stoi(sr.payload);
+                req->threshold = std::stoi(sr.payload());
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetSegmentMode>(
@@ -489,13 +489,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetSegmentMode::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::DetectorSetSegmentMode::Request>();
-                req->mode = sr.payload;
+                req->mode = sr.payload();
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::DetectorReloadTemplate>(
@@ -507,8 +507,8 @@ void MainWindow::setupRPC(const std::string& config_path)
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
     }
@@ -520,13 +520,13 @@ void MainWindow::setupRPC(const std::string& config_path)
             [](const ServiceResponse&, auto) {},
             [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CommSetConfig::Request> {
                 auto req = std::make_shared<vision_interfaces::srv::CommSetConfig::Request>();
-                req->config_data = sr.payload;
+                req->config_data = sr.payload();
                 return req;
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->message;
+                sr.set_success(resp->success);
+                sr.set_data(resp->message);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::CommGetConfig>(
@@ -538,8 +538,8 @@ void MainWindow::setupRPC(const std::string& config_path)
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->config_data;
+                sr.set_success(resp->success);
+                sr.set_data(resp->config_data);
                 return sr;
             });
         rs->registerNativeEndpoint<vision_interfaces::srv::CommGetStatus>(
@@ -551,8 +551,8 @@ void MainWindow::setupRPC(const std::string& config_path)
             },
             [](auto resp) -> ServiceResponse {
                 ServiceResponse sr;
-                sr.success = resp->success;
-                sr.data = resp->status_data;
+                sr.set_success(resp->success);
+                sr.set_data(resp->status_data);
                 return sr;
             });
     }
@@ -609,7 +609,7 @@ void MainWindow::setupRPC(const std::string& config_path)
         QMutexLocker locker(&annotation_mutex_);
         latest_annotation_ = msg;
         annotation_updated_ = true;
-        LOG_DEBUG("[Manager] 收到 AnnotationMsg: 帧#%d, 物体数=%d, 模板尺寸=%dx%d", msg.frame_num(), msg.objects.size(), msg.template_width(), msg.template_height());
+        LOG_DEBUG("[Manager] 收到 AnnotationMsg: 帧#%d, 物体数=%d, 模板尺寸=%dx%d", msg.frame_num(), msg.objects_size(), msg.template_width(), msg.template_height());
     });
 }
 
@@ -774,7 +774,7 @@ void MainWindow::onUpdateDisplay()
                 ann = latest_annotation_;
                 annotation_updated_ = false;
                 need_annotation_overlay = true;
-                LOG_DEBUG("[Manager] 使用 AnnotationMsg 绘制: 帧#%d, 物体数=%d", ann.frame_num(), ann.objects.size());
+                LOG_DEBUG("[Manager] 使用 AnnotationMsg 绘制: 帧#%d, 物体数=%d", ann.frame_num(), ann.objects_size());
             }
         }
         
@@ -1139,9 +1139,9 @@ void MainWindow::overlayDetections(cv::Mat& mat, const DetectionMsg& msg)
 
 void MainWindow::overlayAnnotations(cv::Mat& mat, const AnnotationMsg& msg)
 {
-    LOG_DEBUG("[Manager] overlayAnnotations: 物体数=%d, 图像尺寸=%dx%d", msg.objects.size(), mat.cols, mat.rows);
+    LOG_DEBUG("[Manager] overlayAnnotations: 物体数=%d, 图像尺寸=%dx%d", msg.objects_size(), mat.cols, mat.rows);
     
-    if (msg.objects.empty()) {
+    if (msg.objects_size() == 0) {
         LOG_DEBUG("[Manager] overlayAnnotations: 物体列表为空，跳过绘制");
         return;
     }
@@ -1151,15 +1151,16 @@ void MainWindow::overlayAnnotations(cv::Mat& mat, const AnnotationMsg& msg)
     
     LOG_DEBUG("[Manager] overlayAnnotations: 模板尺寸=%dx%d", template_w, template_h);
 
-    for (const auto& obj : msg.objects) {
-        LOG_DEBUG("[Manager] 绘制物体#%d: x=%f, y=%f, angle=%f", obj.id, obj.x, obj.y, obj.angle);
+    for (int i = 0; i < msg.objects_size(); ++i) {
+        const auto& obj = msg.objects(i);
+        LOG_DEBUG("[Manager] 绘制物体#%d: x=%f, y=%f, angle=%f", obj.id(), obj.x(), obj.y(), obj.angle());
         
         // 绘制旋转矩形
         cv::RotatedRect rrect(
-            cv::Point2f(static_cast<float>(obj.x), static_cast<float>(obj.y)),
+            cv::Point2f(static_cast<float>(obj.x()), static_cast<float>(obj.y())),
             cv::Size2f(static_cast<float>(template_w),
                        static_cast<float>(template_h)),
-            static_cast<float>(obj.angle)
+            static_cast<float>(obj.angle())
         );
 
         cv::Point2f vertices[4];
@@ -1171,7 +1172,7 @@ void MainWindow::overlayAnnotations(cv::Mat& mat, const AnnotationMsg& msg)
 
         // 绘制中心十字
         int cs = 15;
-        cv::Point center(static_cast<int>(obj.x), static_cast<int>(obj.y));
+        cv::Point center(static_cast<int>(obj.x()), static_cast<int>(obj.y()));
         cv::line(mat, cv::Point(center.x - cs, center.y),
                  cv::Point(center.x + cs, center.y), cv::Scalar(0, 0, 255), 2);
         cv::line(mat, cv::Point(center.x, center.y - cs),
@@ -1179,19 +1180,19 @@ void MainWindow::overlayAnnotations(cv::Mat& mat, const AnnotationMsg& msg)
 
         // 绘制物体编号标签
         char idx_label[32];
-        std::snprintf(idx_label, sizeof(idx_label), "#%d", obj.id);
+        std::snprintf(idx_label, sizeof(idx_label), "#%d", obj.id());
         cv::putText(mat, idx_label, cv::Point(center.x + 10, center.y - 10),
                     cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
 
         // 绘制坐标信息
         char coord_label[64];
         std::snprintf(coord_label, sizeof(coord_label),
-                      "(%.2f, %.2f, a=%.1f)", obj.x, obj.y, obj.angle);
+                      "(%.2f, %.2f, a=%.1f)", obj.x(), obj.y(), obj.angle());
         cv::putText(mat, coord_label, cv::Point(center.x + 10, center.y + 15),
                     cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 255), 1);
 
         // 绘制角度指示线
-        double rad = obj.angle * CV_PI / 180.0;
+        double rad = obj.angle() * CV_PI / 180.0;
         cv::line(mat, center,
                  cv::Point(center.x + static_cast<int>(25 * std::cos(rad)),
                            center.y + static_cast<int>(25 * std::sin(rad))),

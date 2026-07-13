@@ -250,7 +250,7 @@ install_node() {
     if [[ -f "${BUILD_DIR}/${node_name}/${node_name}" ]]; then
         cp -f "${BUILD_DIR}/${node_name}/${node_name}" "${node_dir}/"
         # 设置 RPATH
-        patchelf --set-rpath '\$ORIGIN/../../lib' "${node_dir}/${node_name}" 2>/dev/null || true
+        patchelf --set-rpath '\$ORIGIN/../lib' "${node_dir}/${node_name}" 2>/dev/null || true
     fi
     echo "    已安装: ${node_dir}/"
 }
@@ -348,7 +348,7 @@ elif [[ "$TARGET" == "dag-launcher" ]]; then
     mkdir -p "${DAG_DIR}"
     if [[ -f "${BUILD_DIR}/dag/dag_launcher" ]]; then
         cp -f "${BUILD_DIR}/dag/dag_launcher" "${DAG_DIR}/"
-        patchelf --set-rpath '\$ORIGIN/../../lib' "${DAG_DIR}/dag_launcher" 2>/dev/null || true
+        patchelf --set-rpath '\$ORIGIN/../lib' "${DAG_DIR}/dag_launcher" 2>/dev/null || true
     fi
     cp -f "${SCRIPT_DIR}/config/system_config"*.xml "${DAG_DIR}/" 2>/dev/null || true
     echo ""

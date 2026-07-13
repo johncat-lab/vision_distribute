@@ -21,7 +21,7 @@ find_path(TINYXML2_INCLUDE_DIR tinyxml2.h
     NO_DEFAULT_PATH)
 find_library(TINYXML2_LIBRARY
     NAMES tinyxml2
-    PATHS ${CMAKE_PREFIX_PATH}/lib /usr/lib /usr/local/lib
+    PATHS ${CMAKE_PREFIX_PATH}/lib /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu
     NO_DEFAULT_PATH)
 
 if(TINYXML2_INCLUDE_DIR AND TINYXML2_LIBRARY)

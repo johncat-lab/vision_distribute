@@ -8,11 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 二进制安装路径: install/bins/<nodename>/<binary>，库路径: install/lib/
 # 同时添加 conda 环境路径以找到系统库（Protobuf, OpenCV 等）
 if(APPLE)
-    set(CMAKE_INSTALL_RPATH "@loader_path/../../lib;${CMAKE_PREFIX_PATH}/lib")
-    set(CMAKE_BUILD_RPATH "@loader_path/../../lib;${CMAKE_PREFIX_PATH}/lib")
+    set(CMAKE_INSTALL_RPATH "@loader_path/../lib;${CMAKE_PREFIX_PATH}/lib")
+    set(CMAKE_BUILD_RPATH "@loader_path/../lib;${CMAKE_PREFIX_PATH}/lib")
 else()
-    set(CMAKE_INSTALL_RPATH "\$ORIGIN/../../lib;${CMAKE_PREFIX_PATH}/lib")
-    set(CMAKE_BUILD_RPATH "\$ORIGIN/../../lib;${CMAKE_PREFIX_PATH}/lib")
+    set(CMAKE_INSTALL_RPATH "\$ORIGIN/../lib;${CMAKE_PREFIX_PATH}/lib")
+    set(CMAKE_BUILD_RPATH "\$ORIGIN/../lib;${CMAKE_PREFIX_PATH}/lib")
 endif()
 
 if(APPLE)

@@ -15,6 +15,7 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <deque>
 #include <set>
 
 #ifdef HAS_ROS2
@@ -144,7 +145,7 @@ public:
     bool publish(const T& msg) override {
         try {
             auto ros_msg = std::make_unique<std_msgs::msg::ByteMultiArray>();
-            const std::string& raw = msg.serialize();
+            const std::string raw = vision::rpc::serialize(msg);
             ros_msg->data.assign(raw.begin(), raw.end());
             pub_->publish(std::move(ros_msg));
             return true;
@@ -176,15 +177,18 @@ public:
         sub_ = node->create_subscription<std_msgs::msg::ByteMultiArray>(
             topic, qos,
             [this](std::unique_ptr<std_msgs::msg::ByteMultiArray> msg) {
+                LOG_DEBUG("[ROS2] 收到 topic '%s' 消息, %zu bytes", topic_.c_str(), msg->data.size());
                 std::lock_guard<std::mutex> lock(cb_mutex_);
                 if (callback_) {
                     try {
                         std::string raw(msg->data.begin(), msg->data.end());
-                        T deserialized = T::deserialize(raw);
+                        T deserialized = vision::rpc::deserialize<T>(raw);
                         callback_(deserialized);
                     } catch (const std::exception& e) {
                         LOG_ERROR("ROS2 subscriber deserialize error on '%s': %s", topic_.c_str(), e.what());
                     }
+                } else {
+                    LOG_WARN("[ROS2] topic '%s' 收到消息但 callback_ 为空，丢弃", topic_.c_str());
                 }
             });
     }
@@ -594,6 +598,14 @@ private:
     int wait_ms_ = 3000;
     int max_retries_ = 3;
     
+    /// @brief 重试配置
+    struct RetryConfig {
+        int max_retries = 3;
+        int initial_delay_ms = 100;
+        int max_delay_ms = 5000;
+        float backoff_multiplier = 2.0f;
+    };
+    
     // 重试配置
     RetryConfig retry_config_;
     
@@ -608,14 +620,6 @@ private:
     // 每个 endpoint 配置包含: 服务端 create_srv + 客户端 preconnect_client/call_native
     // 实际的 SrvType 在 registerNativeEndpoint<SrvType> 模板实例化时确定,
     // 通过 lambda 捕获实现类型擦除, 外部仅需调用 std::function
-    
-    /// @brief 重试配置
-    struct RetryConfig {
-        int max_retries = 3;
-        int initial_delay_ms = 100;
-        int max_delay_ms = 5000;
-        float backoff_multiplier = 2.0f;
-    };
     
     struct NativeEndpointConfig {
         std::string full_name;

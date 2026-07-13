@@ -67,10 +67,10 @@ void test_ros2_pubsub() {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     DetectionMsg send_msg;
-    send_msg.frame_num = 88;
-    send_msg.timestamp = 1700000000;
-    send_msg.object_count = 2;
-    send_msg.protocol_string = "TA,150,250,35,45,0.92;NG";
+    send_msg.set_frame_num(88);
+    send_msg.set_timestamp(1700000000);
+    send_msg.set_object_count(2);
+    send_msg.set_protocol_string("TA,150,250,35,45,0.92;NG");
 
     bool pub_ok = pub->publish(send_msg);
     TEST_ASSERT(pub_ok, "发布消息失败");
@@ -82,8 +82,8 @@ void test_ros2_pubsub() {
     }
 
     TEST_ASSERT(received.load(), "未收到订阅消息 (超时5秒)");
-    TEST_ASSERT(received_msg.frame_num == 88, "frame_num 不匹配");
-    TEST_ASSERT(received_msg.protocol_string == "TA,150,250,35,45,0.92;NG",
+    TEST_ASSERT(received_msg.frame_num() == 88, "frame_num 不匹配");
+    TEST_ASSERT(received_msg.protocol_string() == "TA,150,250,35,45,0.92;NG",
                 "protocol_string 不匹配");
 
     TEST_PASS("ROS2 Pub/Sub 通信验证通过");
@@ -103,21 +103,21 @@ void test_ros2_service_inproc() {
 
     svc->serve("echo", [](const ServiceRequest& req) -> ServiceResponse {
         ServiceResponse resp;
-        resp.success = true;
-        resp.data = "ACK|" + req.endpoint + "|" + req.payload;
+        resp.set_success(true);
+        resp.set_data("ACK|" + req.endpoint() + "|" + req.payload());
         return resp;
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     ServiceRequest req;
-    req.endpoint = "echo";
-    req.payload = "hello";
+    req.set_endpoint("echo");
+    req.set_payload("hello");
 
     ServiceResponse resp = svc->call("echo", req);
-    TEST_ASSERT(resp.success, "服务响应 success=false");
-    TEST_ASSERT(resp.data == "ACK|echo|hello",
-                "服务响应数据不匹配: " + resp.data);
+    TEST_ASSERT(resp.success(), "服务响应 success=false");
+    TEST_ASSERT(resp.data() == "ACK|echo|hello",
+                "服务响应数据不匹配: " + resp.data());
 
     TEST_PASS("ROS2 Service 单进程模式验证通过");
 }
@@ -136,14 +136,14 @@ void test_ros2_service_crossproc() {
 
     // 直接调用 call()，若 camera_node 未运行则超时抛异常，catch 住跳过
     ServiceRequest req;
-    req.endpoint = "get_config";
-    req.payload  = "";
+    req.set_endpoint("get_config");
+    req.set_payload("");
 
     try {
         ServiceResponse resp = svc->call("get_config", req);
-        std::cerr << "  [跨进程] 收到响应: success=" << resp.success
-                  << " data.size()=" << resp.data.size() << std::endl;
-        TEST_ASSERT(resp.data.size() > 0, "跨进程响应数据为空");
+        std::cerr << "  [跨进程] 收到响应: success=" << resp.success()
+                  << " data.size()=" << resp.data().size() << std::endl;
+        TEST_ASSERT(resp.data().size() > 0, "跨进程响应数据为空");
         TEST_PASS("ROS2 Service 跨进程 client 模式验证通过");
     } catch (const std::exception& e) {
         std::cout << "  SKIP: camera_node 未运行，跳过跨进程测试 (" << e.what() << ")" << std::endl;
