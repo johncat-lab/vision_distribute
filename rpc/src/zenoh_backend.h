@@ -2,6 +2,7 @@
 #include "rpc/publisher.h"
 #include "rpc/subscriber.h"
 #include "rpc/service.h"
+#include "rpc/message_types.h"
 #include "logger/logger.h"
 #include <string>
 #include <stdexcept>
@@ -51,7 +52,7 @@ public:
 
     bool publish(const T& msg) override {
         try {
-            std::string payload = msg.serialize();
+            std::string payload = vision::rpc::serialize(msg);
             z_session_t s = zenoh_global::getSession();
 
             z_put_options_t opts = z_put_options_default();
@@ -131,7 +132,7 @@ private:
             std::string payload(
                 reinterpret_cast<const char*>(sample->payload.start),
                 sample->payload.len);
-            T msg = T::deserialize(payload);
+            T msg = vision::rpc::deserialize<T>(payload);
             self->callback_(msg);
         } catch (const std::exception& e) {
             LOG_ERROR("Zenoh subscriber deserialize error on '%s': %s", self->topic_.c_str(), e.what());
@@ -161,6 +162,10 @@ public:
 
     ~ZenohService() {
         stop_serve();
+    }
+
+    void preconnect() override {
+        // Zenoh 不需要预连接
     }
 
     // ---- 服务端 ----
@@ -214,7 +219,7 @@ public:
                           z_view_keyexpr_loan(&ke_view));
 
         // 序列化请求作为查询 payload
-        std::string req_payload = req.serialize();
+        std::string req_payload = vision::rpc::serialize(req);
 
         // 创建 reply channel 用于同步接收响应
         z_owned_reply_channel_t channel;
@@ -223,6 +228,12 @@ public:
         z_get_options_t opts = z_get_options_default();
         opts.target = Z_QUERY_TARGET_ALL;
         opts.timeout_ms = 5000;
+        // 将序列化的请求作为查询 payload 发送
+        z_owned_bytes_t payload_bytes;
+        z_bytes_from_buf(&payload_bytes,
+                         reinterpret_cast<const uint8_t*>(req_payload.data()),
+                         req_payload.size());
+        opts.payload = z_bytes_move(&payload_bytes);
 
         z_get(s, z_keyexpr_loan(&ke),
               "", z_move(channel.send), &opts);
@@ -243,7 +254,7 @@ public:
                 std::string payload(
                     reinterpret_cast<const char*>(sample->payload.start),
                     sample->payload.len);
-                resp = Response::deserialize(payload);
+                resp = vision::rpc::deserialize<Response>(payload);
             }
         } else {
             z_drop(z_move(reply));
@@ -287,7 +298,7 @@ private:
             std::string req_str(
                 reinterpret_cast<const char*>(payload.start),
                 payload.len);
-            Request req = Request::deserialize(req_str);
+            Request req = vision::rpc::deserialize<Request>(req_str);
 
             // 调用业务 handler
             resp = self->handler_(req);
@@ -297,7 +308,7 @@ private:
         }
 
         // 序列化并发送响应
-        std::string resp_str = resp.serialize();
+        std::string resp_str = vision::rpc::serialize(resp);
         z_query_reply_options_t opts = z_query_reply_options_default();
         z_query_reply(query, z_query_keyexpr(query),
                       reinterpret_cast<const uint8_t*>(resp_str.data()),

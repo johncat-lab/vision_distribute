@@ -254,9 +254,9 @@ void ModbusNode::tick(std::atomic<bool>& running) {
             continue;
         }
 
-        if (latest_detection_.object_count > 0) {
+        if (latest_detection_.object_count() > 0) {
             std::lock_guard<std::mutex> lock(detection_mutex_);
-            int obj_count = latest_detection_.object_count;
+            int obj_count = latest_detection_.object_count();
             std::lock_guard<std::mutex> modbus_lock(modbus_mutex_);
             if (modbus_ctx_) {
                 std::vector<uint16_t> values = {static_cast<uint16_t>(obj_count)};

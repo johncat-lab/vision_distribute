@@ -131,3 +131,11 @@ auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
 ---
 
 **总结：问题确实是 backend 实现问题，核心是 ROS2 DDS reliable QoS + 12MB 大帧 + 30fps 的组合导致传输层全局拥塞，进而使所有 service 调用延迟同步增长直至超时。**
+
+[14:32:39.163] [拓扑] 解析完成: 3 节点, 2 topics, 8 endpoints
+[14:32:49.487] [Service] 创建客户端: detector
+[14:32:49.487] [Service] HAS_ROS2 已定义，尝试注册原生端点
+[14:32:49.490] [Service] dynamic_cast 成功，开始注册端点
+[14:32:49.491] [Service] 已注册 detector 的原生端点
+[14:32:49.491] [调用] detector/onoff payload=0
+[14:32:49.493] [错误] detector: bad_function_call

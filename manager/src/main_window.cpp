@@ -566,24 +566,39 @@ void MainWindow::setupRPC(const std::string& config_path)
     frame_sub_->subscribe([this](const FrameMsg& msg) {
         QMutexLocker locker(&frame_mutex_);
         
+        LOG_DEBUG("[Manager] 帧回调开始, msg.data() size=%zu", msg.data().size());
+        
         int height = msg.height();
         int width = msg.width();
         int pixel_type = msg.pixel_type();
         int cv_type = (pixel_type == 1) ? CV_8UC3 : CV_8UC1;
         
+        LOG_DEBUG("[Manager] 帧参数: height=%d, width=%d, pixel_type=%d, cv_type=%d", 
+                  height, width, pixel_type, cv_type);
+        
         // 创建 Mat 并直接从 Protobuf 数据复制
+        LOG_DEBUG("[Manager] 创建 cv::Mat, size=%dx%d, type=%d", height, width, cv_type);
         current_frame_ = cv::Mat(height, width, cv_type);
+        LOG_DEBUG("[Manager] cv::Mat 创建完成, data=%p, size=%zu", 
+                  current_frame_.data, current_frame_.total() * current_frame_.elemSize());
+        
         const std::string& data = msg.data();
-        if (data.size() == static_cast<size_t>(height * width * (pixel_type == 1 ? 3 : 1))) {
+        size_t expected_size = static_cast<size_t>(height * width * (pixel_type == 1 ? 3 : 1));
+        LOG_DEBUG("[Manager] 数据大小检查: 期望=%zu, 实际=%zu", expected_size, data.size());
+        
+        if (data.size() == expected_size) {
+            LOG_DEBUG("[Manager] 开始 memcpy, data.data()=%p, current_frame_.data=%p, size=%zu", 
+                      data.data(), current_frame_.data, data.size());
             std::memcpy(current_frame_.data, data.data(), data.size());
+            LOG_DEBUG("[Manager] memcpy 完成");
         } else {
-            LOG_ERROR("[Manager] 帧数据大小不匹配: 期望=%d, 实际=%zu", 
-                     height * width * (pixel_type == 1 ? 3 : 1), data.size());
+            LOG_ERROR("[Manager] 帧数据大小不匹配: 期望=%zu, 实际=%zu", 
+                     expected_size, data.size());
         }
         
         current_frame_num_ = msg.frame_num();
         frame_updated_ = true;
-        LOG_DEBUG("[Manager] 收到帧#%d, 尺寸=%dx%d, 像素类型=%d", msg.frame_num(), width, height, pixel_type);
+        LOG_DEBUG("[Manager] 帧#%d 处理完成", msg.frame_num());
         
         // 统计帧率
         frame_count_++;
@@ -591,7 +606,7 @@ void MainWindow::setupRPC(const std::string& config_path)
             std::chrono::system_clock::now().time_since_epoch()).count();
         if (last_fps_time_ == 0) {
             last_fps_time_ = now;
-        } else if (now - last_fps_time_ >= 1000) {  // 每秒计算一次
+        } else if (now - last_fps_time_ >= 1000) {
             double elapsed = (now - last_fps_time_) / 1000.0;
             current_fps_ = static_cast<float>(frame_count_ / elapsed);
             frame_count_ = 0;

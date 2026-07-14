@@ -177,7 +177,6 @@ public:
         sub_ = node->create_subscription<std_msgs::msg::ByteMultiArray>(
             topic, qos,
             [this](std::unique_ptr<std_msgs::msg::ByteMultiArray> msg) {
-                LOG_DEBUG("[ROS2] 收到 topic '%s' 消息, %zu bytes", topic_.c_str(), msg->data.size());
                 std::lock_guard<std::mutex> lock(cb_mutex_);
                 if (callback_) {
                     try {
@@ -187,8 +186,6 @@ public:
                     } catch (const std::exception& e) {
                         LOG_ERROR("ROS2 subscriber deserialize error on '%s': %s", topic_.c_str(), e.what());
                     }
-                } else {
-                    LOG_WARN("[ROS2] topic '%s' 收到消息但 callback_ 为空，丢弃", topic_.c_str());
                 }
             });
     }
@@ -245,30 +242,52 @@ public:
         retry_config_.max_retries = max_retries;
     }
 
+    ~Ros2Service() {
+        // 停止健康检查线程，避免 std::thread 析构时 terminate
+        health_check_running_.store(false);
+        if (health_check_thread_.joinable()) {
+            health_check_thread_.join();
+        }
+    }
+
     // ========== 预连接：提前创建所有已注册 endpoint 的原生 client ==========
     void preconnect() override {
-        std::lock_guard<std::mutex> lock(native_mutex_);
-        
         LOG_INFO("[Ros2Service] 开始预连接和健康检查: %s", name_.c_str());
         
-        for (auto& [endpoint, config] : native_srv_configs_) {
+        // 在锁内收集所有预连接函数和检查函数，释放锁后再执行，
+        // 避免 wait_for_service() 阻塞期间持有 native_mutex_
+        struct PreconnectItem {
+            std::function<void(rclcpp::Node*)> preconnect_fn;
+            std::function<bool()> check_fn;
+            std::string full_name;
+        };
+        std::vector<PreconnectItem> items;
+        {
+            std::lock_guard<std::mutex> lock(native_mutex_);
+            for (auto& [endpoint, config] : native_srv_configs_) {
+                items.push_back({
+                    config.preconnect_client,
+                    config.is_service_available,
+                    config.full_name
+                });
+            }
+        }
+        
+        // 锁已释放，安全执行可能阻塞的操作
+        for (auto& item : items) {
             // 1. 创建 client
-            config.preconnect_client(node_);
+            item.preconnect_fn(node_);
             
-            // 2. 健康检查 (通过类型擦除的函数)
-            if (config.is_service_available) {
+            // 2. 健康检查
+            if (item.check_fn) {
                 LOG_INFO("[Ros2Service] 等待 Service 可用: %s (超时=%dms)", 
-                         config.full_name.c_str(), wait_ms_);
-                
-                // 注意: wait_for_service() 会启动临时 executor
-                // 仅在 preconnect() 时使用，避免与 MultiThreadedExecutor 冲突
-                bool available = config.is_service_available();
-                
+                         item.full_name.c_str(), wait_ms_);
+                bool available = item.check_fn();
                 if (available) {
-                    LOG_INFO("[Ros2Service] ✅ Service 可用: %s", config.full_name.c_str());
+                    LOG_INFO("[Ros2Service] ✅ Service 可用: %s", item.full_name.c_str());
                 } else {
                     LOG_WARN("[Ros2Service] ⚠️ Service 未就绪: %s (将在调用时重试)", 
-                             config.full_name.c_str());
+                             item.full_name.c_str());
                 }
             }
         }
@@ -340,52 +359,9 @@ public:
             };
 
         // 捕获成员变量值而非 this 指针，避免模板上下文中 GCC 对 local type 的限制
-        int timeout_ms = timeout_ms_;
-        int max_retries = max_retries_;
         auto timeout_calc = timeout_calc_;
 
-        // 旧版本 call_native (保持兼容)
-        std::function<ServiceResponse(rclcpp::Node*, const ServiceRequest&)> call_native_fn =
-            [full_name, toNativeReq = std::move(toNativeReq), fromNativeResp = std::move(fromNativeResp),
-             client_holder, client_mtx, timeout_ms, max_retries]
-            (rclcpp::Node* node, const ServiceRequest& req) -> ServiceResponse {
-                // 创建 client if needed
-                {
-                    std::lock_guard<std::mutex> lock(*client_mtx);
-                    if (!*client_holder) {
-                        *client_holder = node->create_client<SrvType>(full_name);
-                        LOG_INFO("[Ros2Service] 原生 client 已创建: %s", full_name.c_str());
-                    }
-                }
-                auto client = *client_holder;
-
-                // 简单重试 (旧版本)
-                for (int retry = 0; retry < max_retries; ++retry) {
-                    LOG_INFO("[Ros2Service::call] %s 发送请求 (尝试 %d/%d)",
-                             full_name.c_str(), retry + 1, max_retries);
-
-                    auto native_req = toNativeReq(req);
-                    auto future = client->async_send_request(native_req);
-
-                    auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
-                    if (status == std::future_status::timeout) {
-                        LOG_WARN("[Ros2Service::call] %s 超时 (重试 %d/%d)",
-                                 full_name.c_str(), retry + 1, max_retries);
-                        if (retry < max_retries - 1) {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                            continue;
-                        }
-                        throw std::runtime_error("ROS2 service call timeout: " + full_name);
-                    }
-
-                    auto native_resp = future.get();
-                    return fromNativeResp(native_resp);
-                }
-
-                throw std::runtime_error("ROS2 service call failed: " + full_name);
-            };
-        
-        // 新版本 call_native_with_retry (支持智能重试)
+        // call_native_with_retry (支持智能重试、指数退避、动态超时)
         std::function<ServiceResponse(rclcpp::Node*, const ServiceRequest&, const RetryConfig&)> call_native_with_retry_fn =
             [full_name, toNativeReq = std::move(toNativeReq), fromNativeResp = std::move(fromNativeResp),
              client_holder, client_mtx, timeout_calc]
@@ -496,7 +472,6 @@ public:
             full_name,
             std::move(create_srv_fn),
             std::move(preconnect_client_fn),
-            std::move(call_native_fn),
             std::move(call_native_with_retry_fn),
             client_holder_ptr,
             std::move(is_available_fn)
@@ -528,14 +503,23 @@ public:
     }
 
     Response call(const std::string& endpoint, const Request& req) override {
-        std::lock_guard<std::mutex> lock(native_mutex_);
-        auto it = native_srv_configs_.find(endpoint);
-        if (it == native_srv_configs_.end()) {
-            throw std::runtime_error(
-                "No native endpoint registered for: " + name_ + "/" + endpoint);
+        // 在锁内复制所需数据，释放锁后再执行调用，
+        // 避免与健康检查线程竞争 native_mutex_ 导致超时
+        using CallFn = std::function<ServiceResponse(rclcpp::Node*, const ServiceRequest&, const RetryConfig&)>;
+        CallFn call_fn;
+        RetryConfig retry_config;
+        {
+            std::lock_guard<std::mutex> lock(native_mutex_);
+            auto it = native_srv_configs_.find(endpoint);
+            if (it == native_srv_configs_.end()) {
+                throw std::runtime_error(
+                    "No native endpoint registered for: " + name_ + "/" + endpoint);
+            }
+            call_fn = it->second.call_native_with_retry;
+            retry_config = retry_config_;
         }
-        // 使用新版本的 call_native_with_retry (支持智能重试)
-        return it->second.call_native_with_retry(node_, req, retry_config_);
+        // 锁已释放，call_native_with_retry 内部使用 client_mtx 保护 client 创建
+        return call_fn(node_, req, retry_config);
     }
     
     /// @brief 异步调用 Service
@@ -573,17 +557,34 @@ private:
         health_check_running_ = true;
         health_check_thread_ = std::thread([this]() {
             while (health_check_running_.load()) {
-                // 每 30 秒检查一次
-                std::this_thread::sleep_for(std::chrono::seconds(30));
+                // 每 30 秒检查一次，但使用短 sleep 以便快速响应停止信号
+                for (int i = 0; i < 30 && health_check_running_.load(); ++i) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+                if (!health_check_running_.load()) break;
                 
-                std::lock_guard<std::mutex> lock(native_mutex_);
-                for (auto& [endpoint, config] : native_srv_configs_) {
-                    if (config.is_service_available) {
-                        bool available = config.is_service_available();
-                        if (!available) {
-                            LOG_WARN("[Ros2Service] ⚠️ Service 不可用: %s", 
-                                     config.full_name.c_str());
+                // 在锁内收集需要检查的函数和名称，释放锁后再执行检查，
+                // 避免 wait_for_service() 阻塞期间持有 native_mutex_
+                // 导致 call() 无法及时获取锁而超时
+                struct CheckItem {
+                    std::function<bool()> check_fn;
+                    std::string full_name;
+                };
+                std::vector<CheckItem> checks;
+                {
+                    std::lock_guard<std::mutex> lock(native_mutex_);
+                    for (auto& [endpoint, config] : native_srv_configs_) {
+                        if (config.is_service_available) {
+                            checks.push_back({config.is_service_available, config.full_name});
                         }
+                    }
+                }
+                // 锁已释放，安全执行可能阻塞的检查
+                for (const auto& item : checks) {
+                    bool available = item.check_fn();
+                    if (!available) {
+                        LOG_WARN("[Ros2Service] ⚠️ Service 不可用: %s", 
+                                 item.full_name.c_str());
                     }
                 }
             }
@@ -626,10 +627,7 @@ private:
         std::function<void(rclcpp::Node*, Handler)> create_srv;
         std::function<void(rclcpp::Node*)> preconnect_client;
         
-        // 旧版本 (保持兼容)
-        std::function<ServiceResponse(rclcpp::Node*, const ServiceRequest&)> call_native;
-        
-        // 新版本 (支持智能重试)
+        // 支持智能重试、指数退避、动态超时
         std::function<ServiceResponse(rclcpp::Node*, const ServiceRequest&, const RetryConfig&)> call_native_with_retry;
         
         // Client holder (用于健康检查)

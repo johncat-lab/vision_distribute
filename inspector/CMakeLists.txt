@@ -25,6 +25,11 @@ target_link_libraries(system_inspector_gui PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
 )
 
+if(TARGET vision_interfaces__rosidl_typesupport_cpp)
+    target_link_libraries(system_inspector_gui PRIVATE
+        vision_interfaces__rosidl_typesupport_cpp)
+endif()
+
 install(TARGETS system_inspector_gui RUNTIME DESTINATION inspector)
 
 # 安装 pipeline 配置文件供 inspector 使用

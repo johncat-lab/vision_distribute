@@ -63,6 +63,8 @@ class InspectorWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit InspectorWindow(const std::string& pipeline_xml,
+                             TransportType transport = TransportType::ZEROMQ,
+                             uint16_t base_port = 15550,
                              QWidget* parent = nullptr);
     ~InspectorWindow() override;
 

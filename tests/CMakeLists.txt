@@ -39,6 +39,10 @@ target_link_libraries(test_generate_template PRIVATE
 if(rclcpp_FOUND)
     add_executable(test_ros2_comm test_ros2_comm.cpp)
     target_link_libraries(test_ros2_comm PRIVATE vision_rpc)
+
+    # ROS2 Service API 接口调用测试
+    add_executable(test_ros2_service_api test_ros2_service_api.cpp)
+    target_link_libraries(test_ros2_service_api PRIVATE vision_rpc)
 endif()
 
 install(TARGETS
@@ -52,5 +56,5 @@ install(TARGETS
 )
 
 if(rclcpp_FOUND)
-    install(TARGETS test_ros2_comm RUNTIME DESTINATION tests)
+    install(TARGETS test_ros2_comm test_ros2_service_api RUNTIME DESTINATION tests)
 endif()

@@ -5,16 +5,16 @@ set -euo pipefail
 #  System Inspector GUI - 启动脚本
 #
 #  用法:
-#    ./inspector_gui.sh <pipeline-name> [base_port]
-#    ./inspector_gui.sh --pipeline <pipeline.xml> [base_port]
-#    ./inspector_gui.sh <path/to/pipeline.xml> [base_port]
+#    ./inspector_gui.sh <pipeline-name> [--transport zeromq|ros2] [base_port]
+#    ./inspector_gui.sh --pipeline <pipeline.xml> [--transport zeromq|ros2] [base_port]
+#    ./inspector_gui.sh <path/to/pipeline.xml> [--transport zeromq|ros2] [base_port]
 #    ./inspector_gui.sh --help
 #
 #  示例:
 #    ./inspector_gui.sh camera-detector-commu
-#    ./inspector_gui.sh image-detector 15550
+#    ./inspector_gui.sh image-detector --transport ros2 15550
 #    ./inspector_gui.sh --pipeline config/dag_image_detector.xml
-#    ./inspector_gui.sh config/dag_camera_detector_comm.xml
+#    ./inspector_gui.sh config/dag_camera_detector_comm.xml --transport ros2
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,9 +39,12 @@ show_help() {
     echo "System Inspector GUI - 可视化调试工具"
     echo ""
     echo "用法:"
-    echo "  ./inspector_gui.sh <pipeline-name> [base_port]"
-    echo "  ./inspector_gui.sh --pipeline <pipeline.xml> [base_port]"
-    echo "  ./inspector_gui.sh <path/to/pipeline.xml> [base_port]"
+    echo "  ./inspector_gui.sh <pipeline-name> [--transport zeromq|ros2] [base_port]"
+    echo "  ./inspector_gui.sh --pipeline <pipeline.xml> [--transport zeromq|ros2] [base_port]"
+    echo "  ./inspector_gui.sh <path/to/pipeline.xml> [--transport zeromq|ros2] [base_port]"
+    echo ""
+    echo "选项:"
+    echo "  --transport <type>  传输后端: zeromq (默认), ros2, zenoh"
     echo ""
     echo "可用的流水线短名称:"
     for entry in "${PIPELINES[@]}"; do
@@ -52,6 +55,7 @@ show_help() {
     echo "示例:"
     echo "  ./inspector_gui.sh camera-detector-commu"
     echo "  ./inspector_gui.sh image-detector 15550"
+    echo "  ./inspector_gui.sh image-detector --transport ros2 15550"
     echo "  ./inspector_gui.sh --pipeline config/dag_image_detector.xml"
     echo ""
 }
@@ -61,29 +65,31 @@ if [[ $# -eq 0 ]]; then
     exit 0
 fi
 
+PIPELINE_NAME=""
 PIPELINE_XML=""
 BASE_PORT="15550"
+TRANSPORT_ARG=""
 
 # ========== 参数解析 ==========
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then
     show_help
     exit 0
 elif [[ "$1" == "--pipeline" ]]; then
-    # --pipeline <file> [base_port]
+    # --pipeline <file> [--transport xxx] [base_port]
     if [[ $# -lt 2 ]]; then
         echo "错误: --pipeline 需要指定 XML 文件路径"
         exit 1
     fi
     PIPELINE_XML="$2"
-    BASE_PORT="${3:-15550}"
+    # BASE_PORT 不在这里设置，由后续参数解析循环统一处理
 elif [[ "$1" == *.xml ]]; then
     # 直接传入 XML 文件路径
     PIPELINE_XML="$1"
-    BASE_PORT="${2:-15550}"
+    # BASE_PORT 不在这里设置，由后续参数解析循环统一处理
 else
     # 按短名称查找
     PIPELINE_NAME="$1"
-    BASE_PORT="${2:-15550}"
+    # BASE_PORT 不在这里设置，由后续参数解析循环统一处理
 
     CONFIG_FILE=""
     for entry in "${PIPELINES[@]}"; do
@@ -116,6 +122,42 @@ else
     fi
 fi
 
+# ========== 从剩余参数中提取 --transport 和 base_port ==========
+if [[ -n "$PIPELINE_NAME" ]]; then
+    # 短名称模式：跳过第一个参数
+    shift
+elif [[ "$1" == "--pipeline" ]]; then
+    # --pipeline 模式：跳过两个参数
+    shift 2
+else
+    # 直接 XML 模式：跳过第一个参数
+    shift
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --transport)
+            TRANSPORT_ARG="--transport $2"
+            shift 2
+            ;;
+        --transport=*)
+            TRANSPORT_ARG="$1"
+            shift
+            ;;
+        *)
+            # 剩余数字参数作为 base_port
+            BASE_PORT="$1"
+            shift
+            ;;
+    esac
+    done
+
+# ========== ROS2 环境 ==========
+if [[ -f /opt/ros/humble/setup.bash ]]; then
+    set +u
+    source /opt/ros/humble/setup.bash 2>/dev/null || true
+    set -u
+fi
 # 验证 XML 文件存在
 if [[ ! -f "$PIPELINE_XML" ]]; then
     echo "错误: pipeline XML 文件不存在: ${PIPELINE_XML}"
@@ -139,6 +181,7 @@ fi
 echo "启动 System Inspector GUI..."
 echo "  Pipeline: ${PIPELINE_XML}"
 echo "  Base Port: ${BASE_PORT}"
+[[ -n "$TRANSPORT_ARG" ]] && echo "  Transport: ${TRANSPORT_ARG#--transport }"
 echo ""
 
-exec "${INSPECTOR_BIN}" "${PIPELINE_XML}" "${BASE_PORT}"
+exec "${INSPECTOR_BIN}" "${PIPELINE_XML}" ${TRANSPORT_ARG} "${BASE_PORT}"

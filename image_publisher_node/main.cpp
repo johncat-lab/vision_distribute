@@ -294,19 +294,16 @@ int main(int argc, char* argv[]) {
         msg.set_exposure_time(0.0f);
         msg.set_gain(0.0f);
 
-        // 压缩像素数据为 PNG（大幅减小消息体积，避免 DDS UDP 大消息丢失）
-        std::vector<uint8_t> compressed;
-        cv::imencode(".png", gray, compressed);
-        std::string data_str(compressed.begin(), compressed.end());
-        msg.set_pixel_type(0);  // pixel_type=0 表示 PNG 压缩数据
+        // 直接发送原始像素数据（不压缩）
+        std::string data_str(reinterpret_cast<const char*>(gray.data),
+                             static_cast<size_t>(gray.rows) * gray.cols);
         msg.set_data(data_str);
 
         frame_pub->publish(msg);
 
-        LOG_DEBUG("[ImagePublisher] 发布帧 #%u: %s (%ux%u, raw=%zu, compressed=%zu bytes)",
+        LOG_DEBUG("[ImagePublisher] 发布帧 #%u: %s (%ux%u, size=%zu bytes)",
                   msg.frame_num(), fs::path(img_path).filename().c_str(),
                   msg.width(), msg.height(),
-                  static_cast<size_t>(gray.rows) * gray.cols,
                   msg.data().size());
 
         ++image_idx;

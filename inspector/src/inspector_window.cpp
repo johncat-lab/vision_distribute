@@ -20,12 +20,35 @@
 #include <set>
 #include <thread>
 #include <chrono>
+#include <unistd.h>
+
+#ifdef HAS_ROS2
+#include "vision_interfaces/srv/camera_set_exposure.hpp"
+#include "vision_interfaces/srv/camera_set_gain.hpp"
+#include "vision_interfaces/srv/camera_set_trigger_mode.hpp"
+#include "vision_interfaces/srv/camera_soft_trigger.hpp"
+#include "vision_interfaces/srv/camera_get_config.hpp"
+#include "vision_interfaces/srv/detector_get_result.hpp"
+#include "vision_interfaces/srv/detector_get_config.hpp"
+#include "vision_interfaces/srv/detector_on_off.hpp"
+#include "vision_interfaces/srv/detector_set_threshold.hpp"
+#include "vision_interfaces/srv/detector_set_v_threshold.hpp"
+#include "vision_interfaces/srv/detector_set_grad_threshold.hpp"
+#include "vision_interfaces/srv/detector_reload_template.hpp"
+#include "vision_interfaces/srv/detector_set_segment_mode.hpp"
+#include "vision_interfaces/srv/comm_set_config.hpp"
+#include "vision_interfaces/srv/comm_get_config.hpp"
+#include "vision_interfaces/srv/comm_get_status.hpp"
+#endif
 
 // ============================================================================
 //  构造/析构
 // ============================================================================
 
-InspectorWindow::InspectorWindow(const std::string& pipeline_xml, QWidget* parent)
+InspectorWindow::InspectorWindow(const std::string& pipeline_xml,
+                                 TransportType transport,
+                                 uint16_t base_port,
+                                 QWidget* parent)
     : QMainWindow(parent), pipeline_path_(pipeline_xml)
 {
     if (!scheduler_.loadFromXml(pipeline_xml)) {
@@ -33,9 +56,11 @@ InspectorWindow::InspectorWindow(const std::string& pipeline_xml, QWidget* paren
             QString::fromStdString(pipeline_xml)), "red");
     }
 
-    node_config_.transport = TransportType::ZEROMQ;
-    node_config_.base_port = 15550;
+    node_config_.transport = transport;
+    node_config_.base_port = base_port;
     node_config_.zmq_service_workers = 2;
+    // 为 inspector 设置唯一 ROS2 节点名，避免与其他进程冲突
+    node_config_.node_name = "inspector_" + std::to_string(getpid());
     factory_ = std::make_unique<NodeFactory>(node_config_);
 
     setupUI();
@@ -64,6 +89,11 @@ InspectorWindow::InspectorWindow(const std::string& pipeline_xml, QWidget* paren
 InspectorWindow::~InspectorWindow()
 {
     fps_timer_->stop();
+
+    // 显式清理 service 客户端，确保 Ros2Service 析构（含健康检查线程 join）
+    // 先于 NodeFactory（ROS2 shutdown）执行，避免访问已销毁的 ROS2 上下文
+    service_clients_.clear();
+    service_call_pending_.clear();
 }
 
 // ============================================================================
@@ -605,6 +635,256 @@ InspectorWindow::getOrCreateServiceClient(const std::string& role)
     service_clients_[role] = svc;
     appendLog(QString("[Service] 创建客户端: %1").arg(
         QString::fromStdString(role)), "blue");
+
+#ifdef HAS_ROS2
+    appendLog("[Service] HAS_ROS2 已定义，尝试注册原生端点", "blue");
+    auto* rs = dynamic_cast<Ros2Service<ServiceRequest, ServiceResponse>*>(svc.get());
+    if (rs) {
+        appendLog("[Service] dynamic_cast 成功，开始注册端点", "blue");
+        if (role == "camera") {
+            rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetExposure>(
+                "set_exposure",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetExposure::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::CameraSetExposure::Request>();
+                    req->exposure_time = std::stof(sr.payload());
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetGain>(
+                "set_gain",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetGain::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::CameraSetGain::Request>();
+                    req->gain = std::stof(sr.payload());
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::CameraSetTriggerMode>(
+                "set_trigger_mode",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CameraSetTriggerMode::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::CameraSetTriggerMode::Request>();
+                    req->mode = sr.payload();
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::CameraSoftTrigger>(
+                "soft_trigger",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraSoftTrigger::Request> {
+                    return std::make_shared<vision_interfaces::srv::CameraSoftTrigger::Request>();
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::CameraGetConfig>(
+                "get_config",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CameraGetConfig::Request> {
+                    return std::make_shared<vision_interfaces::srv::CameraGetConfig::Request>();
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->config_data);
+                    return sr;
+                });
+        } else if (role == "detector") {
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorGetResult>(
+                "get_result",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetResult::Request> {
+                    return std::make_shared<vision_interfaces::srv::DetectorGetResult::Request>();
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(std::string(resp->detection_data.begin(), resp->detection_data.end()));
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorGetConfig>(
+                "get_config",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorGetConfig::Request> {
+                    return std::make_shared<vision_interfaces::srv::DetectorGetConfig::Request>();
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->ready);
+                    sr.set_data(resp->config_data);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorOnOff>(
+                "onoff",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorOnOff::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::DetectorOnOff::Request>();
+                    req->command = sr.payload();
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetThreshold>(
+                "set_threshold",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetThreshold::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::DetectorSetThreshold::Request>();
+                    req->threshold = std::stof(sr.payload());
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetVThreshold>(
+                "set_v_threshold",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetVThreshold::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::DetectorSetVThreshold::Request>();
+                    req->threshold = std::stoi(sr.payload());
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetGradThreshold>(
+                "set_grad_threshold",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetGradThreshold::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::DetectorSetGradThreshold::Request>();
+                    req->threshold = std::stoi(sr.payload());
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorReloadTemplate>(
+                "reload_template",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::DetectorReloadTemplate::Request> {
+                    return std::make_shared<vision_interfaces::srv::DetectorReloadTemplate::Request>();
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::DetectorSetSegmentMode>(
+                "set_segment_mode",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::DetectorSetSegmentMode::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::DetectorSetSegmentMode::Request>();
+                    req->mode = sr.payload();
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+        } else if (role == "comm") {
+            rs->registerNativeEndpoint<vision_interfaces::srv::CommSetConfig>(
+                "set_config",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest& sr) -> std::shared_ptr<vision_interfaces::srv::CommSetConfig::Request> {
+                    auto req = std::make_shared<vision_interfaces::srv::CommSetConfig::Request>();
+                    req->config_data = sr.payload();
+                    return req;
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->message);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::CommGetConfig>(
+                "get_config",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetConfig::Request> {
+                    return std::make_shared<vision_interfaces::srv::CommGetConfig::Request>();
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->config_data);
+                    return sr;
+                });
+            rs->registerNativeEndpoint<vision_interfaces::srv::CommGetStatus>(
+                "get_status",
+                [](auto) -> ServiceRequest { return ServiceRequest{}; },
+                [](const ServiceResponse&, auto) {},
+                [](const ServiceRequest&) -> std::shared_ptr<vision_interfaces::srv::CommGetStatus::Request> {
+                    return std::make_shared<vision_interfaces::srv::CommGetStatus::Request>();
+                },
+                [](auto resp) -> ServiceResponse {
+                    ServiceResponse sr;
+                    sr.set_success(resp->success);
+                    sr.set_data(resp->status_data);
+                    return sr;
+                });
+        }
+        appendLog(QString("[Service] 已注册 %1 的原生端点").arg(
+            QString::fromStdString(role)), "blue");
+    }
+#endif
+
+    // 预连接：创建所有已注册 endpoint 的原生 client，
+    // 并等待 service 可用，避免首次调用时 DDS 发现未完成导致超时
+    try {
+        svc->preconnect();
+    } catch (const std::exception& e) {
+        appendLog(QString("[Service] preconnect 异常: %1").arg(
+            QString::fromStdString(e.what())), "orange");
+    }
+
     return svc;
 }
 
